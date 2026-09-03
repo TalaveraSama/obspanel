@@ -10,8 +10,17 @@ una instancia de VLC controlada por el panel.
   ventana en pantalla completa si está configurado.
 - El reloj del Scheduler manda: cuando llega la hora de la **siguiente
   película**, el motor la carga y la posiciona en el punto correcto.
+- Los botones **⏭ SIGUIENTE** y **⏮ ANTERIOR** cambian de película **al
+  instante** (desde el inicio) y la mantienen al aire hasta que el Scheduler
+  alcanza su hora; en ese momento la entrega es **sin corte** (no se recarga).
+  Las tandas que cayeran en medio del salto se dan por emitidas.
+- Si una película termina antes de su ventana programada (archivo más corto),
+  el motor **encadena solo con la siguiente** para no dejar negro; si termina
+  justo al filo del cambio, espera sin recargar (evita parpadeos).
 - Si VLC queda vacío, termina o se cae, el motor lo vuelve a cargar solo con
   el evento que debe estar al aire.
+- La reanudación tras una tanda usa la opción `:start-time` de libvlc más un
+  seek verificado, para que la película nunca vuelva desde 0.
 - No se genera ningún playlist por HTTP ni se remuxan películas.
 - FFmpeg/ffprobe se usa únicamente para analizar la biblioteca.
 

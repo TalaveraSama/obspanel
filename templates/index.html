@@ -348,7 +348,9 @@ async function tvpVlcAction(action){
     const r=await fetch('/api/vlc/action',{method:'POST',body:new URLSearchParams({action})});
     const d=await r.json();
     if(!d.ok) throw new Error(d.error||'Error VLC');
-    m.textContent='✓ '+action.toUpperCase()+' ejecutado por TVPlayout';
+    const label={next:'⏭ SIGUIENTE',previous:'⏮ ANTERIOR',restart:'↻ REINICIAR',
+                 play:'▶ PLAY',pause:'⏸ PAUSA',stop:'⏹ STOP'}[action]||action.toUpperCase();
+    m.textContent=d.title?('✓ '+label+': '+d.title+' al aire en VLC'):('✓ '+label+' ejecutado');
     if(action==='next'||action==='previous'||action==='restart') setTimeout(()=>refreshPlayout(),300);
   }catch(e){m.textContent='VLC ERROR: '+e.message;}
 }

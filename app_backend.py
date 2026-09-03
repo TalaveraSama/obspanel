@@ -1312,8 +1312,8 @@ async def schedule_update(sid:int=Form(...), start_at:str=Form(...), audio_index
                     FROM schedule s JOIN media m ON m.id=s.media_id WHERE s.id=?""",(sid,)).fetchone()
     c.close()
 
-    # Only touch OBS when the ON-AIR event actually changes its selected tracks.
-    # Saving a schedule entry for a future movie must never reload the current movie.
+    # Solo se toca VLC cuando el evento AL AIRE cambia sus pistas seleccionadas.
+    # Guardar una película futura nunca debe recargar la que está sonando.
     tracks_changed = (
         int(r["audio_index"] or 0) != int(audio_index) or
         int(r["subtitle_index"] if r["subtitle_index"] is not None else -1) != int(subtitle_index)
@@ -1329,8 +1329,7 @@ async def schedule_update(sid:int=Form(...), start_at:str=Form(...), audio_index
     return RedirectResponse("/?tab=scheduler",303)
 
 # ============================================================
-# TVPlayout OBS Scene Manager
-# Crea/repara las escenas estándar sin duplicar Multimedia.
+# API del Scheduler (lectura para la UI)
 # ============================================================
 @app.get("/api/schedule")
 async def schedule_api(page:int=1, per_page:int=20, q:str="", day:str=""):

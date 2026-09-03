@@ -144,13 +144,18 @@ class AdsEngine:
         finally:
             c.close()
 
-    def preview(self, start_at, end_at):
+    def preview(self, start_at, end_at, now=None):
         """
         Devuelve una previsualización sin modificar SQLite.
         Solo coloca tandas entre PROGRAM existentes.
+
+        `now` (opcional) impide que se pre-inserten tandas en el pasado o en
+        los próximos segundos: al activar AUTO_ADS a mitad de una película, una
+        tanda con hora pasada se volvería "actual" y cortaría de golpe.
         """
         st = datetime.fromisoformat(str(start_at))
         en = datetime.fromisoformat(str(end_at))
+        floor = (now or datetime.now()) + timedelta(seconds=5)
 
         c = self._db()
         try:
@@ -187,7 +192,7 @@ class AdsEngine:
         for program in programs:
             pstart = datetime.fromisoformat(program["start_at"])
             pend = datetime.fromisoformat(program["end_at"])
-            cursor = pstart + interval
+            cursor = max(pstart + interval, floor)
 
             while cursor < pend:
                 remaining = (pend - cursor).total_seconds()

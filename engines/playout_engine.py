@@ -109,6 +109,7 @@ class PlayoutEngine:
         self._reload_cooldown_until: float = 0.0        # evita reintentos en bucle
         self._reload_failures: int = 0                  # fallos seguidos del mismo evento
         self._end_events = 0
+        self._advance_cooldown_until: float = 0.0       # anti-bucle en avance automático
         self.player.set_on_end(self._on_player_end)
 
         # Estado visible para la UI
@@ -193,6 +194,53 @@ class PlayoutEngine:
                    WHERE s.status = 'scheduled' AND s.start_at > ?
                    ORDER BY s.start_at, s.id LIMIT 1""", (stamp,)).fetchone()
             return self._row(r)
+        finally:
+            c.close()
+
+    def _find_next_program(self, now: datetime) -> Optional[dict]:
+        """Siguiente evento PROGRAM (película) pendiente, sin contar tandas."""
+        stamp = _now_stamp(now)
+        c = self._db()
+        try:
+            r = c.execute(
+                """SELECT s.*, m.title, m.duration, m.path, m.audio_json, m.subs_json
+                   FROM schedule s JOIN media m ON m.id = s.media_id
+                   WHERE s.status = 'scheduled' AND s.kind = 'PROGRAM'
+                     AND s.start_at > ?
+                   ORDER BY s.start_at, s.id LIMIT 1""", (stamp,)).fetchone()
+            return self._row(r)
+        finally:
+            c.close()
+
+    def _find_event_starting_after(self, dt: datetime, not_before: Optional[datetime] = None) -> Optional[dict]:
+        """Primer evento (de cualquier tipo) que empieza después de dt y cuya
+        ventana no esté ya cerrada (not_before, por defecto 'ahora')."""
+        floor = not_before or self.clock()
+        c = self._db()
+        try:
+            r = c.execute(
+                """SELECT s.*, m.title, m.duration, m.path, m.audio_json, m.subs_json
+                   FROM schedule s JOIN media m ON m.id = s.media_id
+                   WHERE s.status IN ('scheduled','playing')
+                     AND s.start_at > ? AND s.end_at > ?
+                   ORDER BY s.start_at, s.id LIMIT 1""",
+                (_now_stamp(dt), _now_stamp(floor))).fetchone()
+            return self._row(r)
+        finally:
+            c.close()
+
+    def _mark_ads_between_played(self, now: datetime, until_dt: datetime) -> int:
+        """Marca 'played' las tandas pendientes entre ahora y until_dt (p. ej.
+        las que quedarían en medio de un salto manual de película)."""
+        c = self._db()
+        try:
+            cur = c.execute(
+                """UPDATE schedule SET status='played'
+                   WHERE kind='COMMERCIAL' AND status='scheduled'
+                     AND start_at >= ? AND start_at < ?""",
+                (_now_stamp(now - timedelta(seconds=5)), _now_stamp(until_dt))).rowcount
+            c.commit()
+            return int(cur or 0)
         finally:
             c.close()
 
@@ -412,19 +460,120 @@ class PlayoutEngine:
         return (int(row.get("id") or 0), str(row.get("start_at") or ""))
 
     def _ended_but_window_open(self, row: dict, now: datetime) -> bool:
-        """El archivo llegó a su fin pero la ventana del Scheduler sigue abierta
-        (película/anuncio más corto de lo programado). Esperamos al siguiente
-        evento en vez de recargar en bucle un archivo que termina al instante."""
+        """El archivo ya llegó a su fin: NO se recarga (evita el parpadeo de
+        VLC abriendo/cerrando el mismo archivo al filo del cambio de evento).
+        Quedamos a la espera del siguiente evento, que el tick cargará solo.
+
+        Solo se permite recarga por 'error' real (archivo que falló), nunca
+        por 'ended': un archivo terminado se vuelve a terminar al instante.
+        """
         try:
             snap = self.player.snapshot()
         except Exception:
             return False
-        if not (snap.movie_ended or snap.state in ("ended", "error")):
+        if snap.state == "error" and not snap.movie_ended:
+            return False  # error real: el camino con enfriamiento reintenta
+        return bool(snap.movie_ended or snap.state == "ended")
+
+    def _hold_until_for(self, now: datetime, target: Optional[dict]) -> datetime:
+        """Hasta cuándo sostener una reproducción adelantada (SIGUIENTE /
+        ANTERIOR):
+
+        - SIGUIENTE (ventana futura): la toma cede cuando se abre la ventana
+          del evento; en ese instante el tick hace la entrega SIN recarga.
+        - ANTERIOR (ventana ya pasada): se reproduce completa desde ahora.
+        """
+        dur = float((target or {}).get("duration") or 0)
+        if target and target.get("start_at"):
+            try:
+                tstart = datetime.fromisoformat(str(target["start_at"]))
+                if tstart > now:
+                    return max(tstart, now + timedelta(seconds=5))
+            except Exception:
+                pass
+        return now + timedelta(seconds=max(dur, 60.0))
+
+    def _begin_hold(self, row: dict, now: datetime, mode_label: str = "PROGRAM") -> dict:
+        """Reproduce ya un evento del Scheduler (botones SIGUIENTE/ANTERIOR) y
+        lo mantiene al aire hasta que el Scheduler alcanza su ventana.
+
+        Es el mismo mecanismo que TOMAR: el tick respeta la toma hasta su hora
+        y luego el Scheduler retoma sin cortar (mismo archivo, sin recarga).
+        """
+        self._cancel_take()
+        self._clear_interrupt()
+        ai, si = self._audio_sub_indexes(row)
+        hold_row = {
+            "id": row.get("id"),
+            "media_id": row.get("media_id", row.get("id")),
+            "path": str(row.get("path") or ""),
+            "title": row.get("title") or "",
+            "duration": float(row.get("duration") or 0),
+            "audio_json": row.get("audio_json") or "[]",
+            "subs_json": row.get("subs_json") or "[]",
+            "audio_index": ai,
+            "subtitle_index": si,
+            "kind": PROGRAM,
+        }
+        self._load_row(hold_row, 0)
+        until = self._hold_until_for(now, row)
+        # Las tandas pendientes que caigan dentro del tramo adelantado se dan
+        # por emitidas para que el Scheduler no interrumpa esta reproducción.
+        try:
+            self._mark_ads_between_played(now, until)
+        except Exception:
+            pass
+        self._take = {
+            "schedule_id": row.get("id"),
+            "media_id": hold_row["media_id"],
+            "path": hold_row["path"],
+            "title": hold_row["title"],
+            "duration": hold_row["duration"],
+            "audio_index": ai,
+            "subtitle_index": si,
+            "start_at": _now_stamp(now),
+            "end_at": _now_stamp(until),
+            "until": until.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        self.ui.update({
+            "mode": "TAKE",
+            "current": {
+                "schedule_id": row.get("id"),
+                "media_id": hold_row["media_id"],
+                "title": hold_row["title"],
+                "duration": hold_row["duration"],
+                "audio_index": ai,
+                "subtitle_index": si,
+                "kind": "TAKE",
+                "position_ms": 0,
+                "scheduled_start": row.get("start_at") or "",
+            },
+            "ad_break": False,
+            "interrupted_title": None,
+        })
+        self._last_event_key = None   # el Scheduler no pelea con la toma
+        self._last_reload_key = ("hold", row.get("id"))
+        self._mark_playing(row.get("id"))
+        self._asrun(hold_row)
+        return {"ok": True, "title": hold_row["title"],
+                "scheduler_id": row.get("id"), "kind": str(row.get("kind") or PROGRAM)}
+
+    def _advance_to_next(self, now: datetime) -> bool:
+        """Cuando la película al aire termina antes de su ventana (archivo más
+        corto o salto manual), encadena con la siguiente película en vez de
+        dejar VLC parado (pantalla negra)."""
+        if time.monotonic() < self._advance_cooldown_until:
+            return False
+        nxt = self._find_next_program(now)
+        if not nxt:
             return False
         try:
-            end = datetime.fromisoformat(str(row.get("end_at") or ""))
-            return (end - now).total_seconds() > 3.0
-        except Exception:
+            res = self._begin_hold(nxt, now)
+            self._advance_cooldown_until = time.monotonic() + 2.0
+            return bool(res.get("ok"))
+        except Exception as e:
+            self._last_error = f"avance automático: {e}"
+            self._advance_cooldown_until = time.monotonic() + 5.0
             return False
 
     def _reload_throttled(self, row: dict, now: datetime,
@@ -598,6 +747,44 @@ class PlayoutEngine:
         if self._take is not None and now < datetime.fromisoformat(str(self._take.get("until") or "")):
             return self._tick_take(now)
 
+        # La toma (TOMAR / SIGUIENTE / ANTERIOR) llegó a su fin: el Scheduler
+        # manda de nuevo. Si el evento que entra es justo el que ya estaba
+        # sonando (salto manual adelantado), NO se recarga: entrega sin corte.
+        if self._take is not None:
+            held_sid = self._take.get("schedule_id")
+            held_path = str(self._take.get("path") or "")
+            self._take = None
+            if cur is not None and held_sid == cur.get("id"):
+                try:
+                    snap = self.player.snapshot()
+                    if snap.state in ("playing", "paused", "buffering", "opening") and (
+                            not snap.uri or _norm_path(snap.uri) == _norm_path(held_path)):
+                        self._last_event_key = self._event_key(cur)
+                        kind = str(cur.get("kind") or PROGRAM)
+                        self.ui.update({
+                            "mode": kind,
+                            "current": {
+                                "schedule_id": cur.get("id"),
+                                "media_id": cur.get("media_id", cur.get("id")),
+                                "title": cur.get("title") or "",
+                                "duration": float(cur.get("duration") or 0),
+                                "audio_index": int(cur.get("audio_index") or 0),
+                                "subtitle_index": int(cur.get("subtitle_index") if cur.get("subtitle_index") is not None else -1),
+                                "kind": kind,
+                                "position_ms": int(snap.position_ms or 0),
+                            },
+                            "ad_break": False,
+                        })
+                        self._mark_playing(cur.get("id"))
+                        return {"ok": True, "event": cur.get("id"), "kind": kind,
+                                "handover": True}
+                except Exception:
+                    pass
+            # El contenido adelantado terminó su ventana: ciérralo en el
+            # historial para que no quede como 'playing' para siempre.
+            if held_sid:
+                self._mark_played(held_sid)
+
         if cur is None:
             # Sin programación: dejar VLC en reposo
             if self.ui.get("mode") != IDLE or self._last_event_key is not None:
@@ -690,7 +877,19 @@ class PlayoutEngine:
             return {"ok": True, "event": cur.get("id"), "kind": PROGRAM}
 
         # Mismo evento PROGRAM ya manejado -> salud de VLC
-        if not self._ended_but_window_open(cur, now):
+        if self._ended_but_window_open(cur, now):
+            # La película terminó su archivo. Si aún falta bastante para el
+            # siguiente evento, encadena ya con la siguiente película (24/7 sin
+            # negros); si el cambio es inminente, simplemente se espera.
+            try:
+                end = datetime.fromisoformat(str(cur.get("end_at") or ""))
+                if (end - now).total_seconds() > 2.0:
+                    if self._advance_to_next(now):
+                        return {"ok": True, "event": cur.get("id"), "kind": PROGRAM,
+                                "advanced": True}
+            except Exception:
+                pass
+        else:
             try:
                 if self._needs_reload(cur) and self.ui.get("mode") != COMMERCIAL:
                     cursor = self._resume_cursor_ms(cur, now)
@@ -704,23 +903,41 @@ class PlayoutEngine:
     def _tick_take(self, now: datetime) -> dict:
         """Mantiene la toma manual al aire hasta el próximo evento programado."""
         t = self._take or {}
+        prev = self.ui.get("current") or {}
         self.ui.update({
             "mode": "TAKE",
             "current": {
-                "schedule_id": None,
+                # schedule_id puede venir de un salto SIGUIENTE/ANTERIOR; se
+                # conserva para que la UI sepa qué evento está adelantado.
+                "schedule_id": t.get("schedule_id") if t.get("schedule_id") is not None else prev.get("schedule_id"),
                 "media_id": t.get("media_id"),
                 "title": t.get("title") or "",
                 "duration": float(t.get("duration") or 0),
                 "audio_index": int(t.get("audio_index") or 0),
                 "subtitle_index": int(t.get("subtitle_index") if t.get("subtitle_index") is not None else -1),
                 "kind": "TAKE",
-                "position_ms": 0,
+                "position_ms": prev.get("position_ms", 0),
+                "scheduled_start": t.get("scheduled_start") or prev.get("scheduled_start") or "",
             },
             "ad_break": False,
             "interrupted_title": None,
         })
-        # Si VLC quedó vacío durante la toma, volver a cargar el archivo.
-        if not self._ended_but_window_open(t, now):
+        # Si el archivo de la toma terminó (o VLC quedó vacío), encadenar con
+        # la siguiente película programada en vez de quedar en negro.
+        ended = False
+        try:
+            snap = self.player.snapshot()
+            ended = bool(snap.movie_ended or snap.state == "ended")
+        except Exception:
+            ended = False
+        if ended:
+            try:
+                until = datetime.fromisoformat(str(t.get("until") or ""))
+                if (until - now).total_seconds() > 2.0 and self._advance_to_next(now):
+                    return {"ok": True, "event": None, "kind": "TAKE", "advanced": True}
+            except Exception as e:
+                self._last_error = str(e)
+        elif not self._ended_but_window_open(t, now):
             try:
                 if self._needs_reload(t):
                     self._reload_throttled(t, now, 0)
@@ -814,32 +1031,30 @@ class PlayoutEngine:
             return {"ok": False, "error": str(e)}
 
     def action_next(self) -> dict:
-        """Salta al siguiente evento programado (botón SIGUIENTE)."""
+        """⏭ SIGUIENTE: reproduce YA la siguiente película programada (desde el
+        inicio) y la mantiene al aire hasta que el Scheduler alcanza su hora.
+
+        Salta también las tandas pendientes que cayeran en el tramo: el botón
+        pide la siguiente PELÍCULA, no el siguiente anuncio."""
         now = self.clock()
-        self._cancel_take()
         cur = self._find_current(now)
         if cur:
             self._mark_played(cur.get("id"))
-        nxt = self._find_next(now)
+        nxt = self._find_next_program(now)
         if not nxt:
-            return {"ok": False, "error": "No hay siguiente evento programado"}
+            return {"ok": False, "error": "No hay siguiente película programada"}
         try:
-            self._clear_interrupt()
-            if str(nxt.get("kind") or PROGRAM) == COMMERCIAL:
-                program = self._find_program_containing(nxt, now)
-                if program:
-                    self._capture_interrupt(program, now)
-                self._start_ad(nxt, now, self._interrupt)
-            else:
-                self._start_program(nxt, now, cursor_ms=0)
-            return {"ok": True, "scheduler_id": nxt.get("id"), "title": nxt.get("title"),
-                    "kind": nxt.get("kind")}
+            res = self._begin_hold(nxt, now)
+            return {"ok": True, "scheduler_id": res.get("scheduler_id"),
+                    "title": res.get("title"), "kind": PROGRAM,
+                    "scheduled_start": nxt.get("start_at")}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     def action_previous(self) -> dict:
+        """⏮ ANTERIOR: vuelve a la película anterior (desde el inicio) y la
+        mantiene al aire hasta que el Scheduler retoma su programación."""
         now = self.clock()
-        self._cancel_take()
         cur = self._find_current(now)
         c = self._db()
         try:
@@ -847,24 +1062,26 @@ class PlayoutEngine:
                 prev = c.execute(
                     """SELECT s.*, m.title, m.duration, m.path, m.audio_json, m.subs_json
                        FROM schedule s JOIN media m ON m.id=s.media_id
-                       WHERE s.start_at < ? AND s.status IN ('scheduled','played')
-                       ORDER BY s.start_at DESC LIMIT 1""",
+                       WHERE s.kind='PROGRAM' AND s.start_at < ?
+                         AND s.status IN ('scheduled','played','playing')
+                       ORDER BY s.start_at DESC, s.id DESC LIMIT 1""",
                     (str(cur.get("start_at") or _now_stamp(now)),)).fetchone()
             else:
                 prev = c.execute(
                     """SELECT s.*, m.title, m.duration, m.path, m.audio_json, m.subs_json
                        FROM schedule s JOIN media m ON m.id=s.media_id
-                       WHERE s.start_at < ?
-                       ORDER BY s.start_at DESC LIMIT 1""",
+                       WHERE s.kind='PROGRAM' AND s.start_at < ?
+                       ORDER BY s.start_at DESC, s.id DESC LIMIT 1""",
                     (_now_stamp(now),)).fetchone()
         finally:
             c.close()
         if not prev:
-            return {"ok": False, "error": "No hay evento anterior"}
+            return {"ok": False, "error": "No hay película anterior"}
         try:
-            self._clear_interrupt()
-            self._start_program(dict(prev), now, cursor_ms=0)
-            return {"ok": True, "scheduler_id": prev["id"], "title": prev["title"]}
+            res = self._begin_hold(dict(prev), now)
+            return {"ok": True, "scheduler_id": res.get("scheduler_id"),
+                    "title": res.get("title"), "kind": PROGRAM,
+                    "scheduled_start": dict(prev).get("start_at")}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -1066,16 +1283,19 @@ class PlayoutEngine:
             ads = pool[:count] or pool[-count:]
         except Exception:
             ads = pool[:2]
-        # Reserva el hueco: borra AUTO_ADS muy cercanos en el tiempo
-        margin = 15 * 60
+        break_seconds = sum(float(a.get("duration") or 0) for a in ads)
+        # Reserva SOLO el hueco de esta tanda: borra AUTO_ADS pendientes que
+        # caigan dentro de la ventana que vamos a ocupar (con pequeño margen).
+        # Tandas más lejanas se conservan intactas.
+        margin = int(break_seconds + 120)
         c = self._db()
         try:
             c.execute(
                 """DELETE FROM schedule
                    WHERE source='AUTO_ADS' AND status='scheduled'
-                     AND start_at > ? AND start_at <= ?""",
+                     AND start_at >= ? AND start_at < ?""",
                 (_now_stamp(now - timedelta(seconds=30)),
-                 _now_stamp(now + timedelta(seconds=margin))))
+                 _now_stamp(now + timedelta(seconds=max(margin, 180)))))
             cursor = now
             for ad in ads:
                 en = cursor + timedelta(seconds=float(ad.get("duration") or 0))
@@ -1093,7 +1313,12 @@ class PlayoutEngine:
                 "seconds": round(sum(float(a.get("duration") or 0) for a in ads), 1)}
 
     def ad_skip(self) -> dict:
-        """Corta la tanda actual y vuelve a la película."""
+        """⏭ SALTAR TANDA: termina la tanda EN CURSO y vuelve a la película.
+
+        Solo se saltan los anuncios CONTIGUOS de esta tanda (hasta el primer
+        hueco de película). Las tandas futuras se conservan: antes este botón
+        borraba todos los AUTO_ADS de los siguientes 30 minutos.
+        """
         now = self.clock()
         cur = self._find_current(now)
         if not cur or str(cur.get("kind") or PROGRAM) != COMMERCIAL:
@@ -1101,24 +1326,43 @@ class PlayoutEngine:
         program = self._find_program_containing(cur, now)
         c = self._db()
         try:
-            # Marca jugada la tanda actual y salta las siguientes AUTO_ADS
-            # muy próximas (misma tanda), para que el motor reanude la película.
-            for row in c.execute(
-                    """SELECT id FROM schedule
-                       WHERE source='AUTO_ADS' AND status='scheduled'
-                         AND start_at >= ? AND start_at <= ?""",
-                    (_now_stamp(now - timedelta(seconds=30)),
-                     _now_stamp(now + timedelta(seconds=1800)))).fetchall():
+            rows = c.execute(
+                """SELECT s.id, s.start_at, m.duration
+                   FROM schedule s JOIN media m ON m.id = s.media_id
+                   WHERE s.kind='COMMERCIAL' AND s.status IN ('scheduled','playing')
+                     AND s.start_at >= ?
+                   ORDER BY s.start_at, s.id""",
+                (_now_stamp(now - timedelta(seconds=30)),)).fetchall()
+            cursor_t = now
+            skipped = 0
+            for row in rows:
+                try:
+                    st = datetime.fromisoformat(str(row["start_at"]))
+                except Exception:
+                    break
+                gap = (st - cursor_t).total_seconds()
+                if gap > 60:
+                    break  # hueco de película: termina esta tanda
                 c.execute("UPDATE schedule SET status='played' WHERE id=?", (row["id"],))
+                skipped += 1
+                try:
+                    dur = float(row["duration"] or 0)
+                    cursor_t = max(cursor_t, st + timedelta(seconds=max(dur, 1.0)))
+                except Exception:
+                    cursor_t = st
             c.commit()
         finally:
             c.close()
+        # NO se borra self._interrupt: el próximo tick reanuda la película en la
+        # posición REAL capturada al cortar (más preciso que el cursor).
+        self._ad_phase = False
         self.ui["ad_break"] = False
         self.ui["mode"] = PROGRAM
         # Fuerza la transición: el motor reanudará la película en el próximo tick
         self._last_event_key = None
         self.ui["current"] = self._mini(program)
-        return {"ok": True, "title": program["title"] if program else ""}
+        return {"ok": True, "title": (program or {}).get("title", ""),
+                "skipped": skipped}
 
     def maintain_auto_ads(self) -> dict:
         """Mantiene insertadas las tandas AUTO_ADS de las próximas horas."""
@@ -1142,7 +1386,7 @@ class PlayoutEngine:
             inserted = 0
             for prog in programs[:40]:
                 try:
-                    preview = self._ads_engine.preview(prog["start_at"], prog["end_at"])
+                    preview = self._ads_engine.preview(prog["start_at"], prog["end_at"], now=now)
                     if preview.get("ok"):
                         res = self._ads_engine.insert_preview(preview)
                         inserted += int(res.get("inserted", 0) or 0)

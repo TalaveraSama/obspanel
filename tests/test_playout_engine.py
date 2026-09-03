@@ -260,6 +260,146 @@ class EngineTest(unittest.TestCase):
                          "file:/// y ruta local son el mismo archivo: no recargar")
 
 
+    def test_action_next_plays_immediately_and_holds_until_scheduled(self):
+        """⏭ SIGUIENTE con la peli B futura: debe sonar YA y NO detenerse en
+        los ticks siguientes (antes VLC paraba -> pantalla negra)."""
+        ma = self._add_media(self.mov_a, "Película A", 600)
+        mb = self._add_media(self.mov_b, "Película B", 600)
+        start = self.now
+        self._add_event(ma, start, start + timedelta(minutes=30))
+        self._add_event(mb, start + timedelta(minutes=30), start + timedelta(minutes=60))
+        self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_a))
+
+        res = self.engine.action_next()
+        self.assertTrue(res.get("ok"), res)
+        self.assertEqual(self.player.uri, str(self.mov_b),
+                         "SIGUIENTE debe cargar la siguiente película al instante")
+
+        # Pasan ticks: la toma sostiene B; el Scheduler NO debe pararla.
+        for _ in range(5):
+            self.now += timedelta(seconds=1)
+            self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_b),
+                         "La película adelantada debe seguir al aire (sin negro)")
+        self.assertEqual(self.player.state, "playing")
+
+        # Al llegar la hora de B la entrega es sin corte: no se recarga.
+        opens_before = len([c for c in self.player.calls if c[0] == "open"])
+        self.now = start + timedelta(minutes=30, seconds=1)
+        self.player.uri = str(self.mov_b)
+        self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_b))
+        opens_after = len([c for c in self.player.calls if c[0] == "open"])
+        self.assertEqual(opens_before, opens_after,
+                         "La entrega al Scheduler no debe recargar la misma película")
+
+    def test_action_next_skips_pending_ads_between(self):
+        """SIGUIENTE pide la siguiente PELÍCULA: las tandas intermedias se
+        marcan emitidas y no deben interrumpir la película adelantada."""
+        ma = self._add_media(self.mov_a, "Película A", 600)
+        mb = self._add_media(self.mov_b, "Película B", 600)
+        ad = self._add_media(self.ad1, "Spot", 30, category="Commercial")
+        start = self.now
+        self._add_event(ma, start, start + timedelta(minutes=30))
+        self._add_event(ad, start + timedelta(minutes=10),
+                        start + timedelta(minutes=10, seconds=30),
+                        kind="COMMERCIAL", source="AUTO_ADS")
+        self._add_event(mb, start + timedelta(minutes=30), start + timedelta(minutes=60))
+        self.engine.tick()
+        self.engine.action_next()
+        self.assertEqual(self.player.uri, str(self.mov_b))
+
+        # Llega la hora de la tanda intermedia: NO debe cortar la película B.
+        self.now = start + timedelta(minutes=10, seconds=1)
+        self.player.pos = 100_000
+        self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_b),
+                         "La tanda intermedia saltada no debe interrumpir")
+        self.assertFalse(self.engine.ui["ad_break"])
+
+    def test_ended_movie_does_not_flicker_at_window_edge(self):
+        """Película terminada justo al filo del cambio: no se recarga (antes
+        VLC parpadeaba en negro recargando el mismo archivo)."""
+        ma = self._add_media(self.mov_a, "Película A", 600)
+        mb = self._add_media(self.mov_b, "Película B", 600)
+        start = self.now
+        self._add_event(ma, start, start + timedelta(seconds=600))
+        self._add_event(mb, start + timedelta(seconds=600), start + timedelta(seconds=1200))
+        self.engine.tick()
+        # A terminó su archivo a 1s del cambio de evento.
+        self.now = start + timedelta(seconds=599)
+        self.player.state = "ended"
+        self.player.pos = 600_000
+        self.engine.tick()
+        opens = [c for c in self.player.calls if c[0] == "open"]
+        self.assertEqual(len(opens), 1,
+                         "No debe recargar una película que ya terminó")
+
+    def test_ended_movie_advances_to_next_early(self):
+        """Si la película termina mucho antes de su ventana, el motor encadena
+        con la siguiente película en vez de dejar VLC parado."""
+        ma = self._add_media(self.mov_a, "Película A", 600)
+        mb = self._add_media(self.mov_b, "Película B", 600)
+        start = self.now
+        # Ventana de A larga; su archivo (FakePlayer) "termina" de inmediato.
+        self._add_event(ma, start, start + timedelta(minutes=30))
+        self._add_event(mb, start + timedelta(minutes=30), start + timedelta(minutes=60))
+        self.engine.tick()
+        self.now = start + timedelta(minutes=5)
+        self.player.state = "ended"
+        self.player.pos = 600_000
+        self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_b),
+                         "Al terminar la película con tiempo de sobra, encadena la siguiente")
+
+    def test_ad_skip_only_clears_current_break(self):
+        """SALTAR TANDA no debe borrar tandas futuras lejanas (antes borraba
+        todos los AUTO_ADS de los siguientes 30 minutos)."""
+        ma = self._add_media(self.mov_a, "Película A", 7200)
+        ad = self._add_media(self.ad1, "Spot", 30, category="Commercial")
+        start = self.now
+        self._add_event(ma, start, start + timedelta(minutes=120))
+        # Tanda en curso (dos spots contiguos)
+        self._add_event(ad, start, start + timedelta(seconds=30),
+                        kind="COMMERCIAL", source="AUTO_ADS")
+        self._add_event(ad, start + timedelta(seconds=30), start + timedelta(seconds=60),
+                        kind="COMMERCIAL", source="AUTO_ADS")
+        # Tanda futura (a los 40 min) que DEBE conservarse
+        future = self._add_event(ad, start + timedelta(minutes=40),
+                                 start + timedelta(minutes=40, seconds=30),
+                                 kind="COMMERCIAL", source="AUTO_ADS")
+        self.player.pos = 30_000
+        self.now = start + timedelta(seconds=1)
+        self.engine.tick()  # entra la tanda
+        self.assertTrue(self.engine.ui["ad_break"])
+        res = self.engine.ad_skip()
+        self.assertTrue(res.get("ok"), res)
+        rows = {r["id"]: r["status"] for r in self._rows()}
+        self.assertEqual(rows.get(future), "scheduled",
+                         "La tanda futura debe seguir programada")
+
+    def test_action_previous_plays_immediately(self):
+        """⏮ ANTERIOR también reproduce ya (mismo arreglo que SIGUIENTE)."""
+        ma = self._add_media(self.mov_a, "Película A", 600)
+        mb = self._add_media(self.mov_b, "Película B", 600)
+        start = self.now
+        # A ya pasó (ventana cerrada), B está al aire ahora.
+        self._add_event(ma, start - timedelta(minutes=30), start - timedelta(seconds=1))
+        self._add_event(mb, start, start + timedelta(minutes=30))
+        self.now = start + timedelta(minutes=1)
+        self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_b))
+        res = self.engine.action_previous()
+        self.assertTrue(res.get("ok"), res)
+        self.assertEqual(self.player.uri, str(self.mov_a))
+        for _ in range(3):
+            self.now += timedelta(seconds=1)
+            self.engine.tick()
+        self.assertEqual(self.player.uri, str(self.mov_a),
+                         "La película anterior debe sostenerse al aire")
+
+
 class TrackMappingTest(unittest.TestCase):
     def test_ordinal_ignores_disable_entry(self):
         descs = [TrackDesc(-1, "Disable"), TrackDesc(4, "Spanish"),

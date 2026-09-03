@@ -533,7 +533,14 @@ class VlcPlayer(BasePlayer):
             try:
                 media = self._vlc.Media(self._instance, str(uri))
                 # python-vlc elige new_path / new_location según el formato.
-                for opt in options or ():
+                opts = list(options or ())
+                # Posición de arranque: además del set_time posterior (que a
+                # veces se pierde si VLC aún está abriendo), le damos a libvlc
+                # la opción :start-time para que arranque directamente en el
+                # punto correcto (reanudar tras tanda / cursor del Scheduler).
+                if start_ms and start_ms > 0 and not any(str(o).startswith(":start-time") for o in opts):
+                    opts.append(":start-time=%.3f" % (int(start_ms) / 1000.0))
+                for opt in opts:
                     try:
                         media.add_option(str(opt))
                     except Exception:
@@ -565,19 +572,45 @@ class VlcPlayer(BasePlayer):
                     return {"ok": False, "error": self._last_error, "state": state,
                             "uri": str(uri)}
                 if start_ms and start_ms > 0:
-                    if state in (STATE_PLAYING, STATE_PAUSED, STATE_BUFFERING):
-                        try:
-                            self._player.set_time(int(max(0, start_ms)))
-                            time.sleep(0.15)
-                        except Exception:
-                            pass
+                    # Respaldo explícito al :start-time: si VLC arrancó en 0
+                    # (archivos en red o contenedores que ignoran la opción),
+                    # se posiciona ya con reproducción activa y se verifica.
+                    self._seek_verified(int(max(0, start_ms)), retries=3,
+                                        tolerance_ms=2500)
                 # Reintento de pantalla completa una vez que la ventana existe
                 self._apply_fullscreen()
                 return {"ok": True, "uri": str(uri),
-                        "start_ms": int(start_ms or 0), "state": self._state_name()}
+                        "start_ms": int(start_ms or 0), "state": self._state_name(),
+                        "position_ms": self.position_ms()}
             except Exception as e:
                 self._last_error = f"abrir media: {e}"
                 return {"ok": False, "error": self._last_error}
+
+    def _seek_verified(self, target_ms: int, retries: int = 3,
+                       tolerance_ms: int = 2000) -> dict:
+        """set_time con verificación: algunos contenedores/red ignoran el seek
+        mientras están abriendo, así que se reintenta hasta que la posición
+        real se acerque al objetivo (evita que una película se reanude en 0)."""
+        target = max(0, int(target_ms or 0))
+        last_actual = self.position_ms()
+        for attempt in range(max(1, int(retries))):
+            try:
+                state = self._state_name()
+                if state == STATE_ERROR:
+                    break
+                self._player.set_time(target)
+                time.sleep(0.12 + 0.08 * attempt)
+                last_actual = self.position_ms()
+                # VLC nunca devuelve la posición exacta; aceptar cercanía.
+                if abs(last_actual - target) <= max(500, int(tolerance_ms)):
+                    break
+                # Si el archivo es más corto que el objetivo, no insistir.
+                length = self.length_ms()
+                if length and target >= length > 0:
+                    break
+            except Exception:
+                break
+        return {"ok": True, "target_ms": target, "actual_ms": int(last_actual)}
 
     def _wait_ready(self, timeout_ms: int = 6000) -> str:
         """Espera a que la reproducción arranque; devuelve el estado final."""
@@ -749,11 +782,9 @@ class VlcPlayer(BasePlayer):
                         self._libvlc_error_text() or "no se pudo reproducir.")
                     return {"ok": False, "target_ms": target, "actual_ms": self.position_ms(),
                             "error": self._last_error}
-                self._player.set_time(target)
-                # verificación
-                time.sleep(0.12)
-                actual = self.position_ms()
-                return {"ok": True, "target_ms": target, "actual_ms": actual}
+                res = self._seek_verified(target, retries=4, tolerance_ms=2000)
+                res["ok"] = True
+                return res
             except Exception as e:
                 self._last_error = f"seek: {e}"
                 return {"ok": False, "target_ms": target, "actual_ms": self.position_ms(),
