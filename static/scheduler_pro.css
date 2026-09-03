@@ -1,0 +1,37 @@
+/* TVPlayout 13.0 - Scheduler / Control Room visual upgrade */
+.scheduler-pro-table{min-width:1180px!important}
+.scheduler-pro-table .poster-cell{width:58px;text-align:center;padding:6px!important}
+.scheduler-pro-table .sched-poster{width:42px;height:58px;object-fit:cover;border-radius:6px;border:1px solid #31516d;background:#08131f;display:block;margin:auto;box-shadow:0 5px 14px #0006}
+.scheduler-pro-table .sched-poster.missing{opacity:.45;object-fit:contain;padding:9px}
+.scheduler-pro-table .title-cell{min-width:260px;max-width:420px}
+.scheduler-pro-table .title-main{font-weight:900;color:#f4f8fc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.scheduler-pro-table .title-meta{font-size:10px;color:#7893aa;margin-top:4px;display:block}
+.scheduler-pro-table .poster-edit{margin-top:5px;font-size:9px!important;padding:4px 6px!important;background:#153b5d!important;color:#8ecbff!important}
+.scheduler-pro-toolbar{display:grid!important;grid-template-columns:minmax(260px,1fr) 170px auto auto;gap:8px;align-items:center}
+.scheduler-pro-toolbar .schedule-clear{background:#13283b;border:1px solid #294b67;color:#9ec5e5;padding:8px 11px;border-radius:6px;cursor:pointer}
+.scheduler-pro-toolbar .schedule-clear:hover{background:#1a3953;color:#fff}
+.scheduler-day-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border-radius:6px;background:#0b2034;border:1px solid #214966;color:#8fc8f2;font-size:10px;font-weight:900}
+.poster-picker{width:min(920px,94vw)!important;max-height:88vh;overflow:auto}
+.poster-picker .poster-search{display:grid;grid-template-columns:1fr auto;gap:8px;margin:12px 0}
+.poster-picker .poster-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;max-height:55vh;overflow:auto;padding:4px}
+.poster-result{background:#0a1724;border:1px solid #203d55;border-radius:9px;padding:8px;cursor:pointer;transition:.15s;text-align:left;color:#fff}
+.poster-result:hover{border-color:#3c9cff;background:#10263a;transform:translateY(-1px)}
+.poster-result img{width:100%;height:225px;object-fit:cover;border-radius:6px;background:#07111d}
+.poster-result .pr-title{font-weight:900;font-size:12px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.poster-result .pr-year{font-size:10px;color:#7f9ab1;margin-top:3px}
+.poster-result .pr-original{font-size:9px;color:#5f7890;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.poster-current{display:flex;gap:14px;align-items:center;background:#091725;border:1px solid #203c55;border-radius:8px;padding:10px}
+.poster-current img{width:70px;height:96px;object-fit:cover;border-radius:6px;background:#07111d}
+.poster-current strong{display:block;font-size:15px}
+.poster-current small{display:block;color:#819ab0;margin-top:3px}
+.next-pro{position:relative;overflow:hidden}
+.next-pro .next-poster{width:92px;height:128px;object-fit:cover;border-radius:8px;border:1px solid #315775;float:right;margin:0 0 10px 12px;background:#07111d;box-shadow:0 10px 25px #0007}
+.next-pro .next-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;clear:both}
+.next-pro .next-actions button{flex:1;min-width:120px}
+.next-edit-modal{width:min(760px,94vw)!important}
+.next-edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.next-edit-grid label{display:block}
+.next-edit-grid .full{grid-column:1/-1}
+.live-control-room .airHero{border-width:1px}
+.live-chip{display:inline-flex;align-items:center;gap:6px;background:#063b29;color:#4fe5a2;border:1px solid #126b4c;padding:5px 9px;border-radius:99px;font-size:10px;font-weight:900}
+@media(max-width:900px){.scheduler-pro-toolbar{grid-template-columns:1fr 1fr}.poster-picker .poster-results{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}.next-pro .next-poster{width:70px;height:100px}.next-edit-grid{grid-template-columns:1fr}}

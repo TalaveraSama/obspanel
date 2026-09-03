@@ -1,0 +1,78 @@
+{
+  "host": "127.0.0.1",
+  "port": 8088,
+  "ffmpeg": "",
+  "ffprobe": "",
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4455,
+    "password": "Af6SZbjFO6oPhoN8"
+  },
+  "channel": {
+    "name": "MOVIES HD",
+    "scene": "LIVE PROGRAM",
+    "source": "PLAYOUT VLC"
+  },
+  "logo": {
+    "enabled": true,
+    "scene": "LIVE PROGRAM",
+    "source": "logo",
+    "show_during_ads": true
+  },
+  "auto_ads": {
+    "enabled": false,
+    "interval_minutes": 60,
+    "break_seconds": 180,
+    "min_ads": 1,
+    "max_ads": 4,
+    "category": "Commercial",
+    "avoid_repeat": true
+  },
+  "scan": {
+    "interval": 60,
+    "auto_analyze": true
+  },
+  "title_overlay": {
+    "enabled": true,
+    "scene": "LIVE ROGRAM INFO",
+    "source": "Texto (GDI+)",
+    "show_during_ads": false,
+    "interval_minutes": 15,
+    "show_seconds": 180,
+    "wrap_chars": 20,
+    "mode": "gdi",
+    "template": 1,
+    "color1": "#ffffff",
+    "color2": "#8000ff",
+    "poster_source": "poster_imdb",
+    "poster_width": 244,
+    "poster_height": 180,
+    "poster_x": 15,
+    "poster_y": 483,
+    "poster_keep_ratio": true,
+    "poster_crop": true,
+    "logo_source": ""
+  },
+  "imdb": {
+    "enabled": false,
+    "endpoint": "http://api-fulfill.dataexchange.us-east-1.amazonaws.com/v1",
+    "api_key": "",
+    "aws_access_key_id": "",
+    "aws_secret_access_key": ""
+  },
+  "tmdb": {
+    "enabled": true,
+    "auto_enrich": false,
+    "api_key": "598ff32ac857d5ece9d1b988e27a4a62",
+    "language": "es-MX",
+    "region": "MX",
+    "last_error": ""
+  },
+  "vlc": {
+    "enabled": true,
+    "source": "PLAYOUT VLC",
+    "network_caching": 300,
+    "loop": false,
+    "shuffle": false
+  }
+}

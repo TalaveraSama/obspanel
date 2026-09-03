@@ -1,0 +1,486 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TVPlayout 15.8 PRO · VLC</title>
+<link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/scheduler_pro.css"></head><body>
+<header><div class="brand"><div class="brandIcon">▶</div><div><h1>TVPlayout 15.8 <span class="proBadge">PRO</span></h1><span>24 HORAS · SUBTÍTULOS · RED · AUTOMATIZACIÓN</span></div></div><div class="status {{'ok' if obs.connected else 'bad'}}">OBS · {{'CONECTADO' if obs.connected else 'DESCONECTADO'}}</div></header>
+<nav><a class="{{'a' if tab=='playout' else ''}}" href="/?tab=playout">▶ PLAYOUT</a><a class="{{'a' if tab=='scheduler' else ''}}" href="/?tab=scheduler">📅 SCHEDULER</a><a class="{{'a' if tab=='library' else ''}}" href="/?tab=library">🎬 MEDIA POOL</a><a class="{{'a' if tab=='scanner' else ''}}" href="/?tab=scanner">📡 SCANNER</a><a class="{{'a' if tab=='tmdb' else ''}}" href="/?tab=tmdb">🎞️ TMDB</a><a class="{{'a' if tab=='subs' else ''}}" href="/?tab=subs">💬 SUBTÍTULOS</a><a class="{{'a' if tab=='logo' else ''}}" href="/?tab=logo">🏷️ LOGO</a><a class="{{'a' if tab=='ads' else ''}}" href="/?tab=ads">📢 AUTO ANUNCIOS</a><a class="{{'a' if tab=='settings' else ''}}" href="/?tab=settings">⚙️ SALIDA OBS</a></nav>
+<main><div id="liveNotice" class="notice" style="display:none">🔄 Cambio de audio/subtítulos aplicado al aire.</div>
+{% if tab=='scanner' %}<section class="card"><h2>📡 Scanner de biblioteca</h2><p>El escaneo corre en segundo plano: no bloquea el playout ni OBS.</p>{% for f in folders %}<div class="row"><div><b>{{f.name}}</b><small>{{f.path}} · {{'RECUSIVO' if f.recursive else 'SOLO CARPETA'}}</small></div><form method="post" action="/scan/{{f.id}}"><button>🔄 Escanear</button></form></div>{% endfor %}<div id="scanStatus" class="stats"><b>Estado:</b> {{'ESCANEANDO' if state.scanner.running else 'LISTO'}} · <b>Encontrados:</b> {{state.scanner.found}} · <b>Analizados:</b> {{state.scanner.analyzed}} · <b>Pendientes:</b> {{state.scanner.pending}}</div>
+{% if state.scanner.found %}<progress id="scanProgress" value="{{state.scanner.analyzed}}" max="{{state.scanner.found}}"></progress>{% endif %}{% if state.scanner.errors %}<div class="error">{% for e in state.scanner.errors[:20] %}<div>{{e}}</div>{% endfor %}</div>{% endif %}</section>
+{% elif tab=='library' %}<section class="card"><h2>📁 Carpetas</h2><form method="post" action="/folder/add" class="form"><input name="path" placeholder="C:\Peliculas o \\SERVIDOR\Videos" required><input name="name" placeholder="Nombre"><select name="category"><option>Movie</option><option>Series</option><option>Commercial</option><option>Promo</option><option>Ident</option></select><label><input type="checkbox" name="recursive" value="1" checked> Subcarpetas</label><button>＋ Agregar y escanear</button></form></section>
+<section class="card"><h2>🎬 Media Pool / Editor</h2>
+<p>Agregar, modificar, quitar y revisar audio/subtítulos de cada película.</p>
+<div class="libraryToolbar"><input oninput="searchLibrary(this.value)" placeholder="🔎 Buscar película..." /><span id="libraryPager"></span></div>
+<div id="liveMediaPool" class="media"><p>Cargando biblioteca...</p></div>
+</section>
+{% elif tab=='tmdb' %}
+<section class="card">
+<div class="sectionHead"><div><span class="eyebrow">METADATA LOCAL</span><h2>🎞️ TMDB · Biblioteca</h2><p>Identifica películas, guarda título limpio y poster localmente. El playout no consulta TMDB al aire.</p></div>
+<span class="status {{'ok' if tmdb.found or tmdb.total==0 else 'bad'}}" id="tmdbStatus">{{'PROCESANDO' if tmdb.running else 'LISTO'}}</span></div>
+<form method="post" action="/tmdb/config" class="form">
+<label><input type="checkbox" name="enabled" value="1" {% if cfg.tmdb.enabled %}checked{% endif %}> Activar integración TMDB</label>
+<label><input type="checkbox" name="auto_enrich" value="1" {% if cfg.tmdb.auto_enrich %}checked{% endif %}> Enriquecer automáticamente nuevos medios</label>
+<label>API Key <input type="password" name="api_key" placeholder="{{'••••••••••••••••' if cfg.tmdb.api_key else 'Pega tu API key aquí'}}" autocomplete="off"></label>
+<label>Idioma <input name="language" value="{{cfg.tmdb.language}}"></label>
+<label>Región <input name="region" value="{{cfg.tmdb.region}}"></label>
+<button>💾 GUARDAR TMDB</button>
+</form>
+</section>
+<section class="card">
+<div class="stats" id="tmdbStats">
+<b>Total:</b> {{tmdb.total}} · <b>Encontradas:</b> {{tmdb.found}} · <b>Pendientes:</b> {{tmdb.pending}} · <b>No encontradas:</b> {{tmdb.not_found}} · <b>Errores:</b> {{tmdb.errors}}
+</div>
+<div class="twobtn">
+<form method="post" action="/tmdb/run"><button>▶ ENRIQUECER PENDIENTES</button></form>
+<form method="post" action="/tmdb/reset" onsubmit="return confirm('Esto borrará las coincidencias TMDB y los posters descargados, sin borrar películas ni programación. ¿Continuar?')"><button>🧹 RESETEAR TMDB + REESCANEAR</button></form>
+<form method="post" action="/tmdb/retry-errors"><button>↻ REINTENTAR ERRORES</button></form>
+</div>
+{% if tmdb.last_title %}<div class="info">Última: <b>{{tmdb.last_title}}</b></div>{% endif %}
+{% if tmdb.last_error %}<div class="error">{{tmdb.last_error}}</div>{% endif %}
+</section>
+<section class="card">
+<h2>🖼️ Titulador OBS nativo</h2>
+<p>Usa <b>Text (GDI+)</b> e <b>Image Source</b>. No depende de Browser Source. TMDB proporciona las imágenes y TVPlayout las guarda localmente.</p>
+<div class="info">
+<b>Fuentes recomendadas:</b> MOVIE_TITLE · MOVIE_POSTER · MOVIE_LOGO.<br>
+El año se conserva para identificar la película, pero <b>nunca se muestra</b>.
+</div>
+</section>
+<script>
+async function pollTMDB(){
+ try{
+  const r=await fetch('/api/tmdb',{cache:'no-store'}); const d=await r.json();
+  const s=document.getElementById('tmdbStats'), st=document.getElementById('tmdbStatus');
+  if(s)s.innerHTML=`<b>Total:</b> ${d.total} · <b>Encontradas:</b> ${d.found} · <b>Pendientes:</b> ${d.pending} · <b>No encontradas:</b> ${d.not_found} · <b>Errores:</b> ${d.errors}`;
+  if(st){st.textContent=d.running?'PROCESANDO':'LISTO';st.className='status '+(d.running?'bad':'ok');}
+ }catch(e){}
+}
+setInterval(pollTMDB,5000);
+pollTMDB();
+</script>
+{% elif tab=='subs' %}<section class="card"><h2>💬 Subtítulos</h2><p>V9 detecta subtítulos internos del MKV y archivos externos SRT/ASS/SSA/VTT junto a la película.</p><pre>Película.mkv
+Película.srt
+Película.es.srt
+Película.en.srt
+Película.forced.es.srt</pre><div class="info">Los SRT externos se asocian por nombre de archivo. Al seleccionar uno, V9 crea un archivo temporal para reproducirlo sin modificar el original.</div></section>
+{% elif tab=='scheduler' %}<section class="card schedulerHero"><div class="sectionHead"><div><span class="eyebrow">PROGRAMACIÓN 24/7</span><h2>📅 Scheduler 12.9</h2><p>Generación por bloques de 7 días para proteger el playout.</p></div><div class="schedulerActions"><form method="post" action="/schedule/delete-week" onsubmit="return confirm('¿Eliminar toda la semana seleccionada? No se borrarán películas del Media Pool.')"><input type="hidden" name="start_date" id="clearWeekDate" value="{{today}}"><button class="danger">🧹 LIMPIAR SEMANA</button></form><form method="post" action="/schedule/clear-month" onsubmit="return confirm('¿Eliminar TODA la programación del mes? Las películas permanecerán en Media Pool.')"><input type="hidden" name="month" value="{{month}}"><button class="danger">🧹 LIMPIAR MES</button></form></div></div>
+<p>El mes se genera en bloques independientes de 7 días. Esto evita una operación enorme y permite revisar cada semana.</p>
+<form method="post" action="/generate-month" class="form">
+<label>Mes<input type="month" name="month" value="{{month}}"></label>
+<label>Modo<select name="mode"><option value="random">🎲 ALEATORIO</option><option value="sequential">📋 SECUENCIAL</option></select></label>
+<label>Categoría<select name="category"><option>Movie</option><option>Series</option><option value="">Todas</option></select></label>
+<label><input type="checkbox" name="avoid_repeat" value="1" checked> Ciclo sin repetir hasta agotar</label>
+<button>⚡ GENERAR MES POR SEMANAS</button>
+</form>
+<div class="info">Cada día se llena de 00:00:00 a 24:00:00. En aleatorio se baraja un ciclo y solo vuelve a mezclar cuando se agota.</div>
+<div id="generationStatus" class="info" style="display:none"></div>
+</section>
+<section class="card"><h2>🗓️ Generar una semana</h2>
+<form method="post" action="/generate-week" class="form">
+<label>Inicio<input id="weekStartDate" type="date" name="start_date" value="{{today}}" required onchange="document.getElementById('clearWeekDate').value=this.value"></label>
+<label>Modo<select name="mode"><option value="random">🎲 ALEATORIO</option><option value="sequential">📋 SECUENCIAL</option></select></label>
+<label>Categoría<select name="category"><option>Movie</option><option>Series</option><option value="">Todas</option></select></label>
+<label><input type="checkbox" name="avoid_repeat" value="1" checked> Ciclo sin repetir</label>
+<button>＋ GENERAR 7 DÍAS</button>
+</form>
+</section><section class="card">
+<h2>➕ Agregar contenido al Scheduler</h2>
+<p>Selecciona una película del Media Pool, indica fecha/hora y agrégala manualmente. También puedes usar arrastrar y soltar.</p>
+<div id="dropScheduler" class="dropzone">ARRASTRA UNA PELÍCULA AQUÍ</div>
+<div id="manualSelected" class="info">Ningún medio seleccionado.</div>
+<form method="post" action="/schedule/add" id="manualScheduleForm" class="form">
+<input type="hidden" name="mid" id="manualMid">
+<label>Inicio<input type="datetime-local" name="start_at" id="manualStart" required></label>
+<label>Audio<input type="number" name="audio_index" id="manualAudio" value="0" min="0"></label>
+<label>Subtítulo<input type="number" name="subtitle_index" id="manualSub" value="-1" min="-1"></label>
+<label>Tipo<select name="kind"><option>PROGRAM</option><option>COMMERCIAL</option><option>PROMO</option></select></label>
+<button>＋ AGREGAR AL SCHEDULER</button>
+</form>
+</section>
+<section class="card">
+<h2>🛠️ Scheduler / Editor AJAX</h2>
+<div class="libraryToolbar"><input id="schedSearch" placeholder="🔎 Buscar película..." oninput="scheduleSearch(this.value)"><input id="schedDay" type="date" onchange="loadSchedule(1)"><span id="schedulePager"></span></div>
+<div class="table-responsive"><table id="scheduleTable"><thead><tr><th>Fecha / hora</th><th>Contenido</th><th>Tipo</th><th>Audio</th><th>SRT</th><th></th></tr></thead><tbody><tr><td colspan="6">Cargando...</td></tr></tbody></table></div>
+</section>
+<section class="card"><h2>📢 Agregar anuncio manualmente</h2>
+<p>Selecciona un medio de categoría Commercial/Promo y colócalo directamente en el playout.</p>
+<form method="post" action="/schedule/add-ad" class="form">
+<label>Anuncio<select name="mid">{% for m in media %}{% if m.category in ['Commercial','Promo'] %}<option value="{{m.id}}">{{m.title}} · {{'%.1f'|format(m.duration/60)}} min</option>{% endif %}{% endfor %}</select></label>
+<label>Inicio<input type="datetime-local" name="start_at" required></label>
+<label>Audio<input type="number" name="audio_index" min="0" value="0"></label>
+<label>Subtítulo<input type="number" name="subtitle_index" min="-1" value="-1"></label>
+<button>＋ INSERTAR ANUNCIO</button></form></section>
+{% elif tab=='logo' %}
+<section class="card"><h2>🏷️ Configuración de Logo de Tanda</h2>
+<p>Selecciona exactamente la escena y fuente de OBS donde está el logo. Durante COMMERCIAL se activa esa fuente.</p>
+<form method="post" action="/config/logo-v10" class="form">
+<label>Escena del logo<select name="scene" id="logoScene"><option value="">-- Seleccionar escena --</option>
+{% for sc in obs.scenes %}<option value="{{sc.scene}}" {% if sc.scene==cfg.logo.scene %}selected{% endif %}>{{sc.scene}}</option>{% endfor %}</select></label>
+<label>Fuente del logo<select name="source" id="logoSource"><option value="">-- Seleccionar fuente --</option>
+{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" {% if x==cfg.logo.source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}</select></label>
+<label><input type="checkbox" name="enabled" value="1" {% if cfg.logo.enabled %}checked{% endif %}> Activar logo</label>
+<label><input type="checkbox" name="show_during_ads" value="1" {% if cfg.logo.show_during_ads %}checked{% endif %}> Mostrar durante anuncios</label>
+<div class="twobtn"><button type="button" onclick="refreshOBSScenes()">🔄 ACTUALIZAR ESCENAS</button><button>💾 GUARDAR LOGO</button></div></form>
+</section>
+{% elif tab=='ads' %}<section class="card"><h2>📢 Auto anuncios aleatorios</h2><form method="post" action="/config/ads" class="form"><label><input type="checkbox" name="enabled" value="1" {% if cfg.auto_ads.enabled %}checked{% endif %}> Activar</label><label>Intervalo<input type="number" name="interval_minutes" value="{{cfg.auto_ads.interval_minutes}}"></label><label>Objetivo tanda (seg)<input type="number" name="break_seconds" value="{{cfg.auto_ads.break_seconds}}"></label><label>Mínimo<input type="number" name="min_ads" value="{{cfg.auto_ads.min_ads}}"></label><label>Máximo<input type="number" name="max_ads" value="{{cfg.auto_ads.max_ads}}"></label><label>Categoría<select name="category"><option>Commercial</option><option>Promo</option></select></label><label><input type="checkbox" name="avoid_repeat" value="1" {% if cfg.auto_ads.avoid_repeat %}checked{% endif %}> No repetir</label><button>Guardar</button></form></section>
+{% elif tab=='settings' %}
+<section class="card"><h2>⚙️ Salida de Playout / OBS</h2>
+<p>Esta sección controla exactamente qué escena y qué fuente recibe las películas del playout.</p>
+<form method="post" action="/config/channel" class="form">
+<label>Nombre del canal<input name="name" value="{{cfg.channel.name}}"></label>
+<label>Escena de Playout<select name="scene" id="outScene">
+<option value="">-- Seleccionar escena --</option>
+{% for sc in obs.scenes %}<option value="{{sc.scene}}" {% if sc.scene==cfg.channel.scene %}selected{% endif %}>{{sc.scene}}</option>{% endfor %}
+</select></label>
+<label>Fuente de Playout<select name="source" id="outSource">
+<option value="">-- Seleccionar fuente --</option>
+{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" data-scene="{{sc.scene}}" {% if x==cfg.channel.source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}
+</select></label>
+<div class="twobtn"><button type="button" onclick="refreshOBSScenes()">🔄 ACTUALIZAR ESCENAS</button><button>💾 GUARDAR SALIDA</button></div>
+</form>
+<div class="info"><b>Recomendado:</b> crea en OBS una escena como <b>MOVIES HD</b> y dentro una fuente <b>PLAYOUT</b> de tipo <b>VLC Video Source</b>. Selecciona ambos aquí.</div>
+</section>
+<section class="card"><h2>📝 Título / Lower automático</h2>
+<p>Modo recomendado: <b>VLC Video Source</b>. TVPlayout controla el reproductor VLC interno de OBS mediante OBS WebSocket.</p>
+<form method="post" action="/config/title-overlay" class="form" id="titleOverlayForm">
+<label>Escena<select name="scene" id="titleScene"><option value="">-- Seleccionar escena --</option>{% for sc in obs.scenes %}<option value="{{sc.scene}}" {% if sc.scene==cfg.title_overlay.scene %}selected{% endif %}>{{sc.scene}}</option>{% endfor %}</select></label>
+<label>Fuente título (Text GDI+)<select name="source" id="titleSource"><option value="">-- Seleccionar fuente --</option>{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" data-scene="{{sc.scene}}" {% if x==cfg.title_overlay.source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}</select></label>
+<label>Fuente poster (Image Source)<select name="poster_source"><option value="">-- Ninguna --</option>{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" {% if x==cfg.title_overlay.poster_source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}</select></label>
+<label>Modo<select name="mode"><option value="gdi" {% if cfg.title_overlay.mode=='gdi' %}selected{% endif %}>NATIVO OBS / GDI+</option><option value="browser" {% if cfg.title_overlay.mode=='browser' %}selected{% endif %}>Browser Source (legacy)</option></select></label>
+<label>Plantilla<select name="template"><option value="1" {% if cfg.title_overlay.template==1 %}selected{% endif %}>1 · Barra lateral</option><option value="2" {% if cfg.title_overlay.template==2 %}selected{% endif %}>2 · Línea inferior</option><option value="3" {% if cfg.title_overlay.template==3 %}selected{% endif %}>3 · Línea superior</option><option value="4" {% if cfg.title_overlay.template==4 %}selected{% endif %}>4 · Degradado</option><option value="5" {% if cfg.title_overlay.template==5 %}selected{% endif %}>5 · Sólido</option></select></label>
+<label>Color título<input type="color" name="color1" value="{{cfg.title_overlay.color1}}"></label>
+<label>Color acento<input type="color" name="color2" value="{{cfg.title_overlay.color2}}"></label>
+<label><input type="checkbox" name="enabled" value="1" {% if cfg.title_overlay.enabled %}checked{% endif %}> Activar overlay</label>
+<label>Mostrar cada (minutos)<input type="number" name="interval_minutes" min="0" value="{{cfg.title_overlay.interval_minutes}}"><small>0 = permanente</small></label>
+<div class="grid2">
+<label>Ancho poster (px)<input type="number" name="poster_width" min="1" value="{{cfg.title_overlay.poster_width}}"></label>
+<label>Alto poster (px)<input type="number" name="poster_height" min="1" value="{{cfg.title_overlay.poster_height}}"></label>
+<label>Posición X<input type="number" name="poster_x" value="{{cfg.title_overlay.poster_x}}"></label>
+<label>Posición Y<input type="number" name="poster_y" value="{{cfg.title_overlay.poster_y}}"></label>
+</div>
+<label><input type="checkbox" name="poster_keep_ratio" value="1" {% if cfg.title_overlay.poster_keep_ratio %}checked{% endif %}> Mantener proporción del poster</label>
+<label><input type="checkbox" name="poster_crop" value="1" {% if cfg.title_overlay.poster_crop %}checked{% endif %}> Recortar al tamaño configurado</label>
+<label>Duración en pantalla (segundos)<input type="number" name="show_seconds" min="1" value="{{cfg.title_overlay.show_seconds}}"></label>
+<label>Máximo de caracteres por línea<input type="number" name="wrap_chars" min="8" max="60" value="{{cfg.title_overlay.wrap_chars}}"></label>
+<label><input type="checkbox" name="show_during_ads" value="1" {% if cfg.title_overlay.show_during_ads %}checked{% endif %}> Mostrar durante comerciales</label>
+<div class="twobtn"><button type="button" onclick="refreshOBSScenes()">🔄 ACTUALIZAR ESCENAS</button><button>💾 GUARDAR LOWER</button></div></form>
+<div class="info"><b>OBS:</b> crea Text (GDI+) <code>MOVIE_TITLE</code> y opcionalmente Image Source <code>MOVIE_POSTER</code>. TVPlayout los actualiza directamente. <br><b>Ejemplo:</b> <code>Atrapando a un Monstruo</code> → <b>Atrapando a un</b> / <b>Monstruo</b>.</div>
+</section>
+<section class="card"><h2>🎞️ TMDB / títulos e imágenes</h2><p>La identificación y las imágenes se gestionan desde el menú <b>TMDB</b>. El título oficial se usa para el titulador y el año no se muestra.</p><div class="info">El único recurso gráfico descargado de TMDB es el poster de la película.</div></section>
+
+<section class="card" id="tvpVlcControls">
+<h2>🎬 VLC · CONTROL DE PLAYOUT</h2>
+<div class="info">OBS usa directamente <b>VLC Video Source</b>. El <b>Scheduler</b> es quien manda la lista y el cambio de película.</div>
+<div class="twobtn">
+<button type="button" onclick="tvpVlc('play')">▶ PLAY</button>
+<button type="button" onclick="tvpVlc('pause')">⏸ PAUSA</button>
+<button type="button" onclick="tvpVlc('previous')">⏮ ANTERIOR</button>
+<button type="button" onclick="tvpVlc('next')">⏭ SIGUIENTE</button>
+<button type="button" onclick="tvpVlc('restart')">↻ REINICIAR</button>
+</div>
+<div id="tvpVlcMsg" class="info">Fuente VLC: {{cfg.vlc.source if cfg.vlc is defined else 'PLAYOUT VLC'}}</div>
+</section>
+<script>
+async function tvpVlc(action){
+ const m=document.getElementById('tvpVlcMsg');
+ try{
+   const r=await fetch('/api/vlc/action',{method:'POST',body:new URLSearchParams({action})});
+   const d=await r.json();
+   if(!d.ok) throw new Error(d.error||'Error VLC');
+   m.textContent='VLC/SCHEDULER: '+action.toUpperCase()+' OK';
+   if(action==='next'||action==='previous') setTimeout(()=>location.reload(),350);
+ }catch(e){m.textContent='VLC ERROR: '+e.message;}
+}
+</script>
+<section class="card"><h2>🔌 Estado OBS</h2><p>Conexión: <b>{{'CONECTADO' if obs.connected else 'DESCONECTADO'}}</b></p>{% if not obs.connected %}<div class="error">{{obs.error}}</div>{% endif %}</section>
+{% else %}
+<section class="controlRoom">
+  <div class="airHero card">
+    <div class="airTop"><div><span class="eyebrow">● ON AIR · CONTROL ROOM</span><h2 id="airTitle">{{current_event.title if current_event else (state.current.title if state.current else 'SIN CONTENIDO')}}</h2><div class="airMeta" id="airMeta">{% if current_event %}{{current_event.start_at[0:10]}} · {{current_event.start_at[11:19]}} → {{current_event.end_at[11:19]}}{% else %}Esperando programación{% endif %}</div></div><span class="live-badge">● EN VIVO</span></div>
+    <div class="progressTrack"><div id="airProgress" class="progressFill" style="width:0%"></div></div>
+    <div class="airClock"><b id="airPosition">00:00:00</b><span>/</span><span id="airDuration">00:00:00</span><b id="airRemaining">—</b></div>
+    <div class="liveControls">
+      <label>Audio<select id="liveAudioSelect"></select></label><label>Subtítulo<select id="liveSubSelect"></select></label>
+<div class="card" id="vlcControlRoom" style="margin-top:12px">
+  <div class="sectionHead">
+    <div><span class="eyebrow">🎬 VLC ENGINE · OBS</span>
+      <h2>CONTROL DIRECTO DEL PLAYOUT</h2>
+      <p>El Scheduler decide la lista. TVPlayout controla la fuente VLC de OBS.</p>
+    </div>
+    <span id="vlcReadyBadge" class="status bad">VLC · NO PREPARADO</span>
+  </div>
+  <div class="stats">
+    <b>Escena:</b> <span id="vlcScene">{{cfg.channel.scene}}</span>
+    · <b>Fuente:</b> <span id="vlcSource">{{cfg.vlc.source if cfg.vlc is defined else 'PLAYOUT VLC'}}</span>
+  </div>
+  <div class="twobtn">
+    <button type="button" onclick="tvpVlcAction('play')">▶ PLAY</button>
+    <button type="button" onclick="tvpVlcAction('pause')">⏸ PAUSA</button>
+    <button type="button" onclick="tvpVlcAction('previous')">⏮ ANTERIOR</button>
+    <button type="button" onclick="tvpVlcAction('next')">⏭ SIGUIENTE PROGRAMADO</button>
+    <button type="button" onclick="tvpVlcAction('restart')">↻ REINICIAR</button>
+    <button type="button" onclick="tvpVlcLoadCurrent()">🎬 CARGAR ACTUAL</button>
+    <button type="button" onclick="tvpVlcSyncPlayout()">⏱ SINCRONIZAR AL PLAYOUT</button>
+    <button type="button" onclick="tvpVlcSyncStatus()">🔎 VERIFICAR SYNC</button>
+    <button type="button" onclick="tvpVlcSetup()">🔧 PREPARAR VLC EN OBS</button>
+  </div>
+  <div id="vlcMsg" class="info">Inicializando VLC…</div>
+</div>
+
+      <button id="liveChangeBtn" type="button">💾 CAMBIAR EN VIVO</button><button type="button" onclick="refreshOBS()">🔄 OBS</button>
+    </div><div id="liveEditMsg" class="info" style="display:none"></div>
+  </div>
+  <aside class="airSide">
+    <section class="card nextHero"><div class="eyebrow">⏭ NEXT · SIGUIENTE</div><h2 id="nextTitle">{{state.next.title if state.next else 'Sin siguiente'}}</h2><div id="nextTime">{{state.next.start_at[11:19] if state.next else '—'}}</div><div id="nextDuration">{{'%.1f'|format(state.next.duration/60) if state.next else '0'}} min</div><button type="button" onclick="openNextEditor()">✏️ EDITAR NEXT</button></section>
+    <section class="card obsMini"><h3>📡 OBS</h3><div>Escena: <b>{{cfg.channel.scene or 'No configurada'}}</b></div><div>Fuente: <b>{{cfg.channel.source or 'No configurada'}}</b></div></section>
+  </aside>
+</section>
+<section class="card upcomingCard"><div class="sectionHead"><div><span class="eyebrow">CONTINUIDAD</span><h2>📋 PRÓXIMOS 5 EVENTOS</h2></div><span id="coverageBadge" class="status ok">24H · CONTINUIDAD</span></div><div id="upcomingList" class="upcomingList"></div></section>
+<section class="card"><div class="sectionHead"><div><span class="eyebrow">BIBLIOTECA</span><h2>🎬 PLAYOUT + MEDIA POOL</h2></div><span class="muted">20 películas por página</span></div><div class="libraryToolbar"><input id="playoutSearch" placeholder="🔎 Buscar película..." oninput="playoutSearch(this.value)"><span id="playoutPager"></span></div><div id="playoutMediaPool" class="media"></div></section>
+<section class="card"><div class="sectionHead"><div><span class="eyebrow">AS-RUN</span><h2>🧾 ÚLTIMOS EVENTOS</h2></div></div><div class="table-responsive"><table><thead><tr><th>Hora</th><th>Contenido</th><th>Tipo</th><th>Audio</th><th>SRT</th><th>Estado</th></tr></thead><tbody>{% for s in asrun[:10] %}<tr><td>{{s.event_time}}</td><td><b>{{s.title}}</b></td><td>{{s.kind}}</td><td>{{s.audio_index}}</td><td>{{s.subtitle_index}}</td><td>{{s.status}}</td></tr>{% else %}<tr><td colspan="6">Sin eventos todavía.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endif %}
+<div id="mediaModal" class="modalWrap" style="display:none"><div class="modalBox"><button class="modalClose" onclick="closeMediaEditor()">×</button><h2>🎬 Editar película</h2><input type="hidden" id="mmId"><label>Título<input id="mmTitle"></label><label>Audio<select id="mmAudio"></select></label><label>Subtítulo<select id="mmSub"></select></label><div class="twobtn"><button onclick="saveMediaEditor()">💾 GUARDAR</button><button class="danger" onclick="closeMediaEditor()">CANCELAR</button></div></div></div></main><script>
+window.TV_TAB={{tab|tojson}};
+let libraryPage=1, libraryQ="";
+
+function escapeHtml(x){return String(x??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');}
+function escapeAttr(x){return escapeHtml(x).replace(/`/g,'&#96;');}
+
+async function loadLibrary(page=1){
+ if(window.TV_TAB!=="library") return;
+ libraryPage=page;
+ const el=document.getElementById("liveMediaPool"); if(!el)return;
+ try{
+  const r=await fetch(`/api/library?page=${page}&per_page=20&q=${encodeURIComponent(libraryQ)}`,{cache:"no-store"});
+  const d=await r.json(); el.innerHTML="";
+  (d.items||[]).forEach(m=>{
+   const row=document.createElement("article");
+   row.className="mediaRow";
+   let a=[],subs=[];
+   try{a=JSON.parse(m.audio_json||"[]")}catch(e){}
+   try{subs=JSON.parse(m.subs_json||"[]")}catch(e){}
+   row.innerHTML=`<b>${escapeHtml(m.title||"Sin título")}</b>
+   <small>${escapeHtml(m.category||"Movie")} · ${((m.duration||0)/60).toFixed(1)} min · ${m.width||0}×${m.height||0}</small>
+   <small>${escapeHtml(m.path||"")}</small>
+   <div class="twobtn"><button type="button" onclick='chooseMedia(${JSON.stringify(m)})'>＋ SCHEDULER</button>
+   <button type="button" onclick='chooseMedia(${JSON.stringify(m)})'>⚙ SELECCIONAR</button></div>`;
+   row.draggable=true;
+   row.addEventListener("dragstart",e=>e.dataTransfer.setData("application/json",JSON.stringify(m)));
+   el.appendChild(row);
+  });
+  const pg=document.getElementById("libraryPager");
+  if(pg)pg.innerHTML=`<button ${d.page<=1?"disabled":""} onclick="loadLibrary(${d.page-1})">‹</button> ${d.page}/${d.pages} <button ${d.page>=d.pages?"disabled":""} onclick="loadLibrary(${d.page+1})">›</button> · ${d.count}`;
+ }catch(e){console.error(e);}
+}
+function searchLibrary(v){libraryQ=v;loadLibrary(1);}
+function chooseMedia(m){
+ const mid=document.getElementById("manualMid"); if(mid)mid.value=m.id;
+ const info=document.getElementById("manualSelected"); if(info)info.textContent=m.title||"";
+}
+function setupDrop(){
+ const dz=document.getElementById("dropScheduler"); if(!dz)return;
+ dz.addEventListener("dragover",e=>{e.preventDefault();dz.classList.add("dragover")});
+ dz.addEventListener("dragleave",()=>dz.classList.remove("dragover"));
+ dz.addEventListener("drop",e=>{
+  e.preventDefault();dz.classList.remove("dragover");
+  try{
+   const m=JSON.parse(e.dataTransfer.getData("application/json")); chooseMedia(m);
+   const now=new Date();now.setSeconds(0,0);
+   const p=n=>String(n).padStart(2,"0");
+   const v=`${now.getFullYear()}-${p(now.getMonth()+1)}-${p(now.getDate())}T${p(now.getHours())}:${p(now.getMinutes())}`;
+   const input=document.getElementById("manualStart");if(input)input.value=v;
+  }catch(err){}
+ });
+}
+if(window.TV_TAB==="library"){loadLibrary(1);}
+if(window.TV_TAB==="scheduler"){setupDrop();}
+</script>
+
+<script>
+let schedulePage=1,scheduleQ='';
+function scheduleSearch(v){scheduleQ=v;loadSchedule(1);}
+function trackOptions(json,selected,type){let a=[];try{a=JSON.parse(json||'[]')}catch(e){};if(type==='sub'){return '<option value="-1" '+(selected<0?'selected':'')+'>Ninguno</option>'+a.map(x=>`<option value="${x.ordinal}" ${x.ordinal==selected?'selected':''}>${escapeHtml((x.language||'und').toUpperCase())}${x.title?' — '+escapeHtml(x.title):''}${x.external?' (SRT)':''}</option>`).join('')}return a.map(x=>`<option value="${x.ordinal}" ${x.ordinal==selected?'selected':''}>${escapeHtml((x.language||'und').toUpperCase())}${x.title?' — '+escapeHtml(x.title):''}</option>`).join('')||'<option value="0">DEFAULT</option>';}
+async function loadSchedule(page=1){if(window.TV_TAB!=='scheduler')return;schedulePage=page;const day=document.getElementById('schedDay')?.value||'';const tb=document.querySelector('#scheduleTable tbody');if(!tb)return;tb.innerHTML='<tr><td colspan="6">Cargando...</td></tr>';try{const r=await fetch(`/api/schedule?page=${page}&per_page=20&q=${encodeURIComponent(scheduleQ)}&day=${encodeURIComponent(day)}`,{cache:'no-store'});const d=await r.json();tb.innerHTML='';(d.items||[]).forEach(s=>{const tr=document.createElement('tr');tr.dataset.id=s.id;tr.innerHTML=`<td><input class="sched-start" type="datetime-local" value="${s.start_at.slice(0,16)}"></td><td><b>${escapeHtml(s.title)}</b><br><small>${(s.duration/60).toFixed(1)} min</small></td><td><select class="sched-kind"><option ${s.kind==='PROGRAM'?'selected':''}>PROGRAM</option><option ${s.kind==='COMMERCIAL'?'selected':''}>COMMERCIAL</option><option ${s.kind==='PROMO'?'selected':''}>PROMO</option></select></td><td><select class="sched-audio">${trackOptions(s.audio_json,s.audio_index,'audio')}</select></td><td><select class="sched-sub">${trackOptions(s.subs_json,s.subtitle_index,'sub')}</select></td><td><button onclick="saveScheduleRow(${s.id},this)">💾</button> <button class="danger" onclick="deleteSchedule(${s.id})">🗑</button></td>`;tb.appendChild(tr)});const pg=document.getElementById('schedulePager');if(pg)pg.innerHTML=`<button ${d.page<=1?'disabled':''} onclick="loadSchedule(${d.page-1})">‹</button> ${d.page}/${d.pages} <button ${d.page>=d.pages?'disabled':''} onclick="loadSchedule(${d.page+1})">›</button> · ${d.count}`;}catch(e){tb.innerHTML=`<tr><td colspan="6" class="error">${escapeHtml(e)}</td></tr>`}}
+async function saveScheduleRow(id,btn){const tr=btn.closest('tr');const payload={sid:id,start_at:tr.querySelector('.sched-start').value,audio_index:+tr.querySelector('.sched-audio').value,subtitle_index:+tr.querySelector('.sched-sub').value,kind:tr.querySelector('.sched-kind').value};btn.disabled=true;try{const r=await fetch('/api/schedule/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!d.ok)throw Error(d.error||'No se pudo guardar');btn.textContent=d.live?'✓ LIVE':'✓';setTimeout(()=>btn.textContent='💾',1500);}catch(e){alert(e.message)}finally{btn.disabled=false}}
+async function deleteSchedule(id){if(!confirm('¿Quitar este evento?'))return;await fetch('/schedule/delete/'+id,{method:'POST'});loadSchedule(schedulePage)}
+if(window.TV_TAB==='scheduler'){loadSchedule(1)}
+async function playoutSearch(v){window.playoutQ=v;loadPlayoutMedia(1)}
+async function loadPlayoutMedia(page=1){if(window.TV_TAB!=='playout')return;const q=window.playoutQ||'';const el=document.getElementById('playoutMediaPool');if(!el)return;const r=await fetch(`/api/library?page=${page}&per_page=20&q=${encodeURIComponent(q)}`,{cache:'no-store'});const d=await r.json();el.innerHTML='';(d.items||[]).forEach(m=>{const a=JSON.parse(m.audio_json||'[]'),s=JSON.parse(m.subs_json||'[]');const x=document.createElement('article');x.innerHTML=`<b>${escapeHtml(m.title)}</b><small>${(m.duration/60).toFixed(1)} min</small><div class="twobtn"><button onclick='openMediaEditor(${JSON.stringify(m)})'>⚙ PISTAS</button><button onclick='takeMedia(${m.id})'>▶ TOMAR</button><button onclick='scheduleMedia(${m.id})'>＋ PROGRAMAR</button></div>`;el.appendChild(x)});const pg=document.getElementById('playoutPager');if(pg)pg.innerHTML=`<button ${d.page<=1?'disabled':''} onclick="loadPlayoutMedia(${d.page-1})">‹</button> ${d.page}/${d.pages} <button ${d.page>=d.pages?'disabled':''} onclick="loadPlayoutMedia(${d.page+1})">›</button> · ${d.count}`}
+async function takeMedia(id){await fetch('/take/'+id,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'audio_index=0&subtitle_index=-1'});location.reload()}
+function scheduleMedia(id){document.getElementById('manualMid').value=id;document.getElementById('manualSelected').textContent='Medio #'+id;window.scrollTo({top:0,behavior:'smooth'});}
+function openMediaEditor(m){const modal=document.getElementById('mediaModal');if(!modal)return;document.getElementById('mmId').value=m.id;document.getElementById('mmTitle').value=m.title;document.getElementById('mmAudio').innerHTML=trackOptions(m.audio_json,0,'audio');document.getElementById('mmSub').innerHTML=trackOptions(m.subs_json,-1,'sub');modal.style.display='flex'}
+function closeMediaEditor(){document.getElementById('mediaModal').style.display='none'}
+async function saveMediaEditor(){const id=+document.getElementById('mmId').value;const fd=new URLSearchParams({mid:id,title:document.getElementById('mmTitle').value,category:'Movie',audio_default:document.getElementById('mmAudio').value,subtitle_default:document.getElementById('mmSub').value});await fetch('/media/update',{method:'POST',body:fd});closeMediaEditor();if(window.TV_TAB==='playout')loadPlayoutMedia(1);else loadLibrary(1)}
+function setupLiveEditor(){const f=document.getElementById('liveEditForm');if(!f)return;f.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(f);const payload={sid:+fd.get('sid'),start_at:fd.get('start_at'),audio_index:+fd.get('audio_index'),subtitle_index:+fd.get('subtitle_index'),kind:fd.get('kind')};const msg=document.getElementById('liveEditMsg');msg.textContent='Preparando pista...';try{const r=await fetch('/api/schedule/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!d.ok)throw Error(d.error||'Error');msg.textContent=d.live?'✓ Audio/SRT actualizado en vivo.':'✓ Guardado sin tocar OBS.';}catch(e){msg.textContent='✕ '+e.message}})}
+setupLiveEditor();
+async function refreshLiveControls(c){
+ const a=document.getElementById('liveAudioSelect'),s=document.getElementById('liveSubSelect'); if(!a||!s)return;
+ const aud=JSON.parse(c.audio_json||'[]'),subs=JSON.parse(c.subs_json||'[]');
+ const oldA=a.value,oldS=s.value;
+ a.innerHTML=aud.map(x=>`<option value="${x.ordinal}">${escapeHtml((x.language||'und').toUpperCase())}${x.title?' — '+escapeHtml(x.title):''}</option>`).join('')||'<option value="0">DEFAULT</option>';
+ s.innerHTML='<option value="-1">Ninguno</option>'+subs.map(x=>`<option value="${x.ordinal}">${escapeHtml((x.language||'und').toUpperCase())}${x.title?' — '+escapeHtml(x.title):''}${x.external?' (SRT)':''}</option>`).join('');
+ if([...a.options].some(x=>x.value==String(c.audio_index)))a.value=String(c.audio_index); else if(oldA)a.value=oldA;
+ if([...s.options].some(x=>x.value==String(c.subtitle_index)))s.value=String(c.subtitle_index); else s.value='-1';
+ const btn=document.getElementById('liveChangeBtn'); if(btn&&!btn.dataset.bound){btn.dataset.bound='1';btn.onclick=async()=>{const msg=document.getElementById('liveEditMsg');msg.style.display='block';msg.textContent='Preparando cambio de pista...';btn.disabled=true;try{const r=await fetch('/api/schedule/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:c.id,start_at:c.start_at.slice(0,16),audio_index:+a.value,subtitle_index:+s.value,kind:c.kind})});const d=await r.json();if(!d.ok)throw Error(d.error||'No se pudo cambiar');msg.textContent=d.live?'✓ Audio/subtítulo cambiado en vivo.':'✓ Guardado.';}catch(e){msg.textContent='✕ '+e.message}finally{btn.disabled=false}}}
+}
+function openNextEditor(){const n=window.__nextEvent;if(n)location.href='/?tab=scheduler&day='+encodeURIComponent(n.start_at.slice(0,10));else location.href='/?tab=scheduler'}
+
+async function tvpVlcSetup(){
+  const m=document.getElementById('vlcMsg');
+  try{
+    m.textContent='Preparando VLC Video Source en OBS...';
+    const r=await fetch('/api/vlc/setup',{method:'POST'});
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No se pudo preparar VLC');
+    document.getElementById('vlcReadyBadge').textContent='VLC · LISTO';
+    document.getElementById('vlcReadyBadge').className='status ok';
+    document.getElementById('vlcScene').textContent=d.scene;
+    document.getElementById('vlcSource').textContent=d.source;
+    m.textContent='✓ Salida VLC preparada: '+d.scene+' → '+d.source;
+    await refreshOBS();
+  }catch(e){
+    document.getElementById('vlcReadyBadge').textContent='VLC · ERROR';
+    document.getElementById('vlcReadyBadge').className='status bad';
+    m.textContent='VLC ERROR: '+e.message;
+  }
+}
+async function tvpVlcSyncStatus(){
+  const m=document.getElementById('vlcMsg');
+  try{
+    const r=await fetch('/api/vlc/sync-status',{cache:'no-store'}),d=await r.json();
+    if(!d.ok) throw new Error(d.error||'Sin evento');
+    const t=Math.round((d.target_ms||0)/1000), a=Math.round((d.actual_ms||0)/1000);
+    m.textContent='Scheduler: '+t+'s · VLC: '+a+'s · '+(d.state||'');
+  }catch(e){m.textContent='SYNC ERROR: '+e.message;}
+}
+async function tvpVlcSyncPlayout(){
+  const m=document.getElementById('vlcMsg');
+  try{
+    m.textContent='Sincronizando VLC con el punto exacto del Scheduler...';
+    const r=await fetch('/api/vlc/sync-playout',{method:'POST'});
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No se pudo sincronizar');
+    const sec=d.cursor_seconds||0;
+    const h=Math.floor(sec/3600), mm=Math.floor((sec%3600)/60), ss=Math.floor(sec%60);
+    m.textContent='✓ PLAYOUT SINCRONIZADO · posición '+String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0')+':'+String(ss).padStart(2,'0');
+  }catch(e){m.textContent='VLC ERROR: '+e.message;}
+}
+async function tvpVlcLoadCurrent(){
+  const m=document.getElementById('vlcMsg');
+  try{
+    m.textContent='Cargando la película actual en VLC...';
+    const r=await fetch('/api/vlc/load-current',{method:'POST'});
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No se pudo cargar');
+    m.textContent='✓ CARGADA EN OBS: '+d.title;
+    setTimeout(refreshVlcState,300);
+  }catch(e){m.textContent='VLC ERROR: '+e.message;}
+}
+async function tvpVlcAction(action){
+  const m=document.getElementById('vlcMsg');
+  try{
+    const r=await fetch('/api/vlc/action',{method:'POST',body:new URLSearchParams({action})});
+    const d=await r.json();
+    if(!d.ok) throw new Error(d.error||'Error VLC');
+    m.textContent='✓ '+action.toUpperCase()+' ejecutado por TVPlayout';
+    if(action==='next'||action==='previous') setTimeout(()=>refreshPlayout(),300);
+  }catch(e){m.textContent='VLC ERROR: '+e.message;}
+}
+async function refreshVlcState(){
+  if(window.TV_TAB!=='playout') return;
+  try{
+    const r=await fetch('/api/vlc/status',{cache:'no-store'}),v=await r.json();
+    const b=document.getElementById('vlcReadyBadge');
+    if(!b)return;
+    b.textContent=v.ready?'VLC · LISTO':'VLC · NO PREPARADO';
+    b.className='status '+(v.ready?'ok':'bad');
+    const sc=document.getElementById('vlcScene'),so=document.getElementById('vlcSource');
+    if(sc)sc.textContent=v.scene||'';
+    if(so)so.textContent=v.source||'';
+    const m=document.getElementById('vlcMsg');
+    if(m && !v.ready) m.textContent='⚠ '+(v.error||'Configura una fuente VLC Video Source en la salida seleccionada.');
+  }catch(e){}
+}
+async function refreshPlayout(){
+ if(window.TV_TAB!=='playout')return;
+ try{
+  const r=await fetch('/api/playout',{cache:'no-store'}),d=await r.json();
+  const c=d.current,n=d.next; window.__nextEvent=n; if(c)refreshLiveControls(c);
+  const title=document.getElementById('airTitle'),meta=document.getElementById('airMeta');
+  if(title)title.textContent=c?.title||'SIN CONTENIDO';
+  if(meta)meta.textContent=c?`${c.start_at.slice(0,10)} · ${c.start_at.slice(11,19)} → ${c.end_at.slice(11,19)}`:'Esperando programación';
+  const nt=document.getElementById('nextTitle'),ntime=document.getElementById('nextTime'),nd=document.getElementById('nextDuration');
+  if(nt)nt.textContent=n?.title||'Sin siguiente'; if(ntime)ntime.textContent=n?.start_at?.slice(11,19)||'—'; if(nd)nd.textContent=n?`${(n.duration/60).toFixed(1)} min`:'0 min';
+  const list=document.getElementById('upcomingList'); if(list)list.innerHTML=(d.upcoming||[]).map((x,i)=>`<div class="upRow"><span class="upIndex">${String(i+1).padStart(2,'0')}</span><b>${escapeHtml(x.start_at.slice(11,19))}</b><span class="upTitle">${escapeHtml(x.title)}</span><span class="upDur">${(x.duration/60).toFixed(1)} min</span><span class="upKind">${escapeHtml(x.kind)}</span></div>`).join('')||'<div class="emptyState">No hay próximos eventos programados.</div>';
+  if(c){const now=new Date(d.now.replace(' ','T')),st=new Date(c.start_at.replace(' ','T')),en=new Date(c.end_at.replace(' ','T'));let pct=Math.max(0,Math.min(100,(now-st)/(en-st)*100));document.getElementById('airProgress').style.width=pct+'%';const sec=Math.max(0,(now-st)/1000),dur=Math.max(0,c.duration||0);document.getElementById('airPosition').textContent=fmtTime(sec);document.getElementById('airDuration').textContent=fmtTime(dur);document.getElementById('airRemaining').textContent='-'+fmtTime(Math.max(0,dur-sec));}
+ }catch(e){}
+}
+function fmtTime(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
+if(window.TV_TAB==='playout'){loadPlayoutMedia(1);refreshPlayout();refreshVlcState();setInterval(refreshPlayout,3000);setInterval(refreshVlcState,8000)}
+</script>
+<script>
+async function refreshScanner(){
+ if(window.TV_TAB!=="scanner")return;
+ try{
+  const r=await fetch('/api/library?page=1&per_page=10',{cache:'no-store'}),d=await r.json();
+  const el=document.getElementById('scanStatus');
+  if(el)el.innerHTML=`<b>Estado:</b> ${d.scanner.running?'ESCANEANDO':'LISTO'} · <b>Encontrados:</b> ${d.scanner.found} · <b>Analizados:</b> ${d.scanner.analyzed} · <b>Pendientes:</b> ${d.scanner.pending} · <b>En Media Pool:</b> ${d.count}`;
+  const bar=document.getElementById('scanProgress');if(bar){bar.max=Math.max(1,d.scanner.found);bar.value=d.scanner.analyzed;}
+ }catch(e){}
+}
+if(window.TV_TAB==="scanner"){refreshScanner();setInterval(refreshScanner,3000);}
+</script>
+
+<script>
+let __obsScenes=[];
+function rebuildSceneSelect(sceneId,sourceId,keepScene,keepSource){
+ const se=document.getElementById(sceneId),so=document.getElementById(sourceId); if(!se)return;
+ const scene=keepScene??se.value??''; const source=keepSource??so?.value??'';
+ se.innerHTML='<option value="">-- Seleccionar escena --</option>'+__obsScenes.map(s=>`<option value="${escapeAttr(s.scene)}">${escapeHtml(s.scene)}</option>`).join(''); se.value=scene;
+ if(!so)return; const sc=__obsScenes.find(x=>x.scene===scene);
+ so.innerHTML='<option value="">-- Seleccionar fuente --</option>'+(sc?.sources||[]).map(x=>`<option value="${escapeAttr(x)}">${escapeHtml(x)}</option>`).join(''); so.value=source;
+}
+async function refreshOBSScenes(){
+ try{const r=await fetch('/api/obs?refresh=1',{cache:'no-store'}),d=await r.json(); if(!d.connected)throw Error(d.error||'OBS desconectado'); __obsScenes=d.scenes||[];
+  for(const p of [['outScene','outSource'],['titleScene','titleSource'],['logoScene','logoSource']]){const se=document.getElementById(p[0]),so=document.getElementById(p[1]); if(se)rebuildSceneSelect(p[0],p[1],se.value,so?.value);}
+ }catch(e){console.warn('OBS scenes:',e.message)}
+}
+if(['settings','logo'].includes(window.TV_TAB))refreshOBSScenes();
+</script>
+<script>
+async function refreshOBS(){
+ try{
+  const r=await fetch('/api/obs?refresh=1',{cache:'no-store'}),d=await r.json();
+  alert(d.connected?'OBS CONECTADO':'OBS DESCONECTADO'+(d.error?': '+d.error:''));
+  location.reload();
+ }catch(e){alert('No se pudo consultar OBS: '+e);}
+}
+</script>
+<script>
+async function refreshGeneration(){
+ if(window.TV_TAB!=="scheduler")return;
+ try{
+  const r=await fetch('/api/generation',{cache:'no-store'}); const d=await r.json();
+  const el=document.getElementById('generationStatus'); if(!el)return;
+  if(!d.running && !d.message && !d.error){el.style.display='none';return;}
+  el.style.display='block';
+  if(d.running){el.innerHTML='⏳ <b>Generando programación en segundo plano...</b> No cierres TVPlayout. La interfaz sigue disponible.';}
+  else if(d.error){el.innerHTML='❌ <b>Error de generación:</b> '+escapeHtml(d.error);}
+  else {
+    const r=d.result||{};
+    if(d.type==='week') el.innerHTML='✅ <b>Semana generada:</b> '+escapeHtml(r.start||d.start||'')+' → '+escapeHtml(r.end||'')+' · '+(r.events||0)+' eventos · '+(r.hours||0)+' h';
+    else el.innerHTML='✅ <b>Mes generado por semanas:</b> '+(r.events||0)+' eventos · '+(r.hours||0)+' h';
+  }
+ }catch(e){}
+}
+if(window.TV_TAB==='scheduler'){refreshGeneration();setInterval(refreshGeneration,3000);}
+</script>
+<script src="/static/scheduler_pro.js"></script></body></html>
+<script>
+(function(){
+ const q=new URLSearchParams(location.search);
+ if(q.get("live")==="1"){
+   const n=document.getElementById("liveNotice");
+   if(n){n.style.display="block";setTimeout(()=>n.style.display="none",5000);}
+   history.replaceState({},document.title,location.pathname+"?tab=playout");
+ }
+})();
+</script>

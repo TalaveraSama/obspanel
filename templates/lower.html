@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=1920,height=1080,initial-scale=1"><title>TVPlayout Lower</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent!important}
+#lower{position:absolute;left:90px;bottom:95px;min-width:420px;max-width:1350px;padding:15px 30px 18px;background:rgba(8,10,14,.92);box-shadow:0 7px 24px rgba(0,0,0,.38);font-family:Segoe UI,Arial,sans-serif;color:var(--c1);opacity:0;transform:translateY(24px);transition:opacity .35s ease,transform .35s ease}
+#lower.show{opacity:1;transform:translateY(0)}
+.line1{font-size:38px;line-height:1.05;font-weight:800;letter-spacing:.2px}.line2{font-size:48px;line-height:1.05;font-weight:900;margin-top:3px;color:var(--c2)}
+#lower.t1{border-left:9px solid var(--c2)}#lower.t2{border-left:0;border-bottom:7px solid var(--c2)}#lower.t3{border-left:0;border-top:7px solid var(--c2)}#lower.t4{border-left:14px solid var(--c2);background:linear-gradient(90deg,rgba(8,10,14,.97),rgba(8,10,14,.48))}#lower.t5{background:var(--c2);border:0;color:#fff}#lower.t5 .line2{color:#fff}
+</style></head><body><div id="lower" class="t3"><div class="line1"></div><div class="line2"></div></div>
+<script>
+function color(v,f){return /^#[0-9a-fA-F]{3,6}$/.test((v||'').trim())?(v||'').trim():f}
+function wrap(t,max){t=(t||'').trim().replace(/\s+/g,' ');if(!t)return['',''];if(t.length<=max)return[t,''];let w=t.split(' '),a='',i=0;for(;i<w.length;i++){let n=a?a+' '+w[i]:w[i];if(n.length>max)break;a=n}if(!a){a=w[0];i=1}return[a,w.slice(i).join(' ')]}
+function apply(){const p=new URLSearchParams(location.search), raw=(p.get('title')||[p.get('line1')||'',p.get('line2')||''].filter(Boolean).join(' ')).trim(), max=Math.max(8,Math.min(60,parseInt(p.get('max')||'20',10)||20)), lines=wrap(raw,max), c1=color(p.get('color1'),'#FFFFFF'), c2=color(p.get('color2'),'#00A8FF'), t=Math.max(1,Math.min(5,parseInt(p.get('id')||'3',10)||3)), el=document.getElementById('lower');document.documentElement.style.setProperty('--c1',c1);document.documentElement.style.setProperty('--c2',c2);el.className='t'+t;el.querySelector('.line1').textContent=lines[0];el.querySelector('.line2').textContent=lines[1];el.classList.add('show')}
+apply();
+</script></body></html>
