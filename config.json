@@ -3,20 +3,14 @@
   "port": 8088,
   "ffmpeg": "",
   "ffprobe": "",
-  "obs": {
-    "host": "127.0.0.1",
-    "port": 4455,
-    "password": "Af6SZbjFO6oPhoN8"
-  },
   "channel": {
     "name": "MOVIES HD",
-    "scene": "LIVE PROGRAM",
-    "source": "PLAYOUT VLC"
+    "source": "VLC"
   },
   "logo": {
-    "enabled": true,
-    "scene": "LIVE PROGRAM",
-    "source": "logo",
+    "enabled": false,
+    "scene": "",
+    "source": "",
     "show_during_ads": true
   },
   "auto_ads": {
@@ -26,16 +20,17 @@
     "min_ads": 1,
     "max_ads": 4,
     "category": "Commercial",
-    "avoid_repeat": true
+    "avoid_repeat": true,
+    "min_program_tail_seconds": 90
   },
   "scan": {
     "interval": 60,
     "auto_analyze": true
   },
   "title_overlay": {
-    "enabled": true,
-    "scene": "LIVE ROGRAM INFO",
-    "source": "Texto (GDI+)",
+    "enabled": false,
+    "scene": "",
+    "source": "",
     "show_during_ads": false,
     "interval_minutes": 15,
     "show_seconds": 180,
@@ -44,7 +39,7 @@
     "template": 1,
     "color1": "#ffffff",
     "color2": "#8000ff",
-    "poster_source": "poster_imdb",
+    "poster_source": "",
     "poster_width": 244,
     "poster_height": 180,
     "poster_x": 15,
@@ -70,9 +65,15 @@
   },
   "vlc": {
     "enabled": true,
-    "source": "PLAYOUT VLC",
+    "path": "",
+    "lib_dir": "",
+    "fullscreen": true,
+    "volume": 100,
     "network_caching": 300,
+    "audio_language": "es,en,spa",
+    "sub_language": "es,en,spa",
     "loop": false,
-    "shuffle": false
+    "shuffle": false,
+    "source": "VLC"
   }
 }

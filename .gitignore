@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-test/
+venv/
+*.egg-info/
+
+# Cache local del panel (posters TMDB, subtitulos UTF-8, etc.)
+cache/
+!cache/.gitkeep
+
+# Entorno
+.env
+*.log
+
+# Paquetes / temporales
+*.zip
+*.tmp
+.DS_Store
+Thumbs.db

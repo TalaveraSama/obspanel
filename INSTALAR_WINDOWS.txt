@@ -1,0 +1,103 @@
+================================================
+  TVPlayout VLC PRO - INSTALACION EN WINDOWS
+  (panel de TV 24h con VLC, SIN OBS)
+================================================
+
+REQUISITOS
+------------------------------------------------
+1) Python 3.11, 3.12 o 3.13
+   - Descargalo de https://www.python.org/downloads/windows/
+   - Al instalar MARCA la casilla: "Add python.exe to PATH"
+
+2) VLC (VideoLAN) - el reproductor que usara el canal
+   - Descargalo de https://www.videolan.org/vlc/
+   - Instalacion normal (para todos los usuarios).
+   - El panel usa la libreria libvlc que trae VLC.
+
+PASOS
+------------------------------------------------
+1) Descomprime TVPlayoutVLC en una carpeta, por ejemplo:
+       C:\TVPlayoutVLC
+   (evita acentos/espacios raros en la ruta si puedes)
+
+2) Si YA tenias una instalacion de TVPlayout con tus datos:
+   - Conserva TU base de datos si es mas reciente:
+     copia tu archivo "tvplayout.db" encima del que trae
+     esta carpeta (contiene tu biblioteca y tu programacion).
+   - El config.json nuevo ya NO tiene OBS (se elimino).
+     Puedes quedarte con el tuyo si quieres: el panel
+     rellena solo los valores VLC que faltan.
+
+3) Doble clic en  INICIAR_TVPLAYOUT.bat
+   - La primera vez crea .venv e instala las dependencias
+     (fastapi, uvicorn, jinja2, python-vlc...).
+   - Se abre el panel en tu navegador:
+          http://127.0.0.1:8088
+
+4) En el panel, pestaña "AJUSTES VLC":
+   - Veras si python-vlc y libvlc se detectaron.
+   - Si libvlc NO aparece (carpeta vacia), escribe la ruta
+     de VLC, por ejemplo:
+          C:\Program Files\VideoLAN\VLC
+     y pulsa "GUARDAR AJUSTES VLC".
+   - Pulsa "INICIAR VLC" (o PREPARAR VLC en PLAYOUT):
+     debe cargar la pelicula que toca segun el Scheduler.
+
+5) Verifica en PLAYOUT:
+   - ▶ PLAY / ⏸ PAUSA / ⏭ SIGUIENTE / ↻ REINICIAR
+   - Al llegar la hora, la SIGUIENTE PELICULA carga sola.
+   - ✂️ TANDA AHORA corta la pelicula, pasa la tanda
+     comercial y la reanuda en el punto exacto.
+
+6) Pestaña "TANDAS":
+   - Activa el refresco automatico (AUTO_ADS) si quieres
+     tandas programadas dentro de cada pelicula.
+   - Debe haber comerciales escaneados con categoria
+     "Commercial" o "Promo" en el Media Pool.
+
+7) Para apagar el canal:
+   - Doble clic en  DETENER_TVPLAYOUT.bat
+   - Cierra el VLC que abrio el panel (o deja la ventana
+     abierta si prefieres volver a arrancar rapido).
+
+PROBLEMAS COMUNES
+------------------------------------------------
+- "python-vlc no disponible" o "VLC no disponible":
+    VLC no esta instalado o el panel no encuentra libvlc.
+    Instala VLC o indica la carpeta en AJUSTES VLC.
+
+- La ventana de VLC se abre y se cierra sola (en bucle):
+    Ya no deberia pasar con esta version. Si VLC no puede
+    reproducir el archivo, el panel ahora lo dice con el
+    motivo exacto en la tarjeta "CONTROL DIRECTO DEL PLAYOUT"
+    (texto en rojo/⚠) y no reintenta cada segundo.
+
+- Error que dice "Archivo no encontrado: D:\..." (o E:\...):
+    La base guardo la ruta de otra maquina/carpeta. Reescanea
+    tus carpetas: pestaña SCANNER -> "Escanear", o agrega la
+    carpeta correcta en MEDIA POOL.
+
+- El panel no abre:
+    Revisa que el puerto 8088 este libre (usa
+    DETENER_TVPLAYOUT.bat si quedó un proceso anterior).
+
+- "py" no se reconoce:
+    Python no quedo en el PATH; reinstala Python marcando
+    "Add python.exe to PATH" y vuelve a abrir la terminal.
+
+- Quieres borrar y reinstalar desde cero:
+    Borra la carpeta .venv (la crea el .bat de nuevo).
+
+REGISTRO DE ERRORES (tvplayout.log)
+------------------------------------------------
+Si algo falla al reproducir, junto a app_backend.py se crea
+el archivo  tvplayout.log  con los errores del motor y de VLC.
+Si necesitas ayuda, envia ese archivo o copia el mensaje rojo
+que muestra el panel al pulsar "CARGAR ACTUAL".
+
+NOTA
+------------------------------------------------
+Esta version reproduce directamente con VLC (libvlc).
+Ya no se necesita OBS ni el plugin vlc_source de OBS.
+Si aun tienes OBS abierto con escenas del canal, puedes
+apagarlo: la salida ahora sale por la ventana de VLC.
