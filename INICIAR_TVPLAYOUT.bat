@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-title TVPlayout 15.8 OBS Optimizado
+title TVPlayout VLC PRO - Playout por VLC
 
 if not exist "requirements.txt" (
   echo ERROR: Falta requirements.txt en:
@@ -25,7 +25,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [2/3] Verificando dependencias...
-".venv\Scripts\python.exe" -c "import fastapi,uvicorn,jinja2,multipart,obsws_python" >nul 2>&1
+".venv\Scripts\python.exe" -c "import fastapi,uvicorn,jinja2,multipart,vlc" >nul 2>&1
 if errorlevel 1 (
   echo Dependencias faltantes. Instalando...
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt
@@ -38,6 +38,8 @@ if errorlevel 1 (
   echo Dependencias OK.
 )
 
-echo [3/3] Iniciando TVPlayout OBS...
+echo [3/3] Iniciando TVPlayout VLC PRO...
+echo NOTA: El panel abre VLC como reproductor. Asegurese de tener VLC instalado
+echo       (el panel busca libvlc en las carpetas tipicas o en Ajustes VLC).
 ".venv\Scripts\python.exe" app.py
 pause

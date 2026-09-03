@@ -5,17 +5,33 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-import obsws_python as obs
+
+# Motor VLC directo (ya no se usa OBS WebSocket). La importación es opcional:
+# si falta python-vlc/libvlc el panel sigue vivo en modo degradado.
+from engines.vlc_player import VLC_BINDINGS_AVAILABLE, build_player, resolve_vlc
+from engines.playout_engine import PlayoutEngine
 
 BASE=Path(__file__).resolve().parent; CFG_PATH=BASE/"config.json"; CFG=json.loads(CFG_PATH.read_text(encoding="utf-8"))
 CFG.setdefault("vlc", {})
 CFG["vlc"].setdefault("enabled", True)
-CFG["vlc"].setdefault("source", "PLAYOUT VLC")
-CFG["channel"].setdefault("source", CFG["vlc"]["source"])
+CFG["vlc"].setdefault("source", "VLC")          # compat: ya no es fuente de OBS
+CFG["vlc"].setdefault("lib_dir", "")            # carpeta de libvlc (opcional)
+CFG["vlc"].setdefault("path", "")               # vlc.exe (detección manual opcional)
+CFG["vlc"].setdefault("fullscreen", True)
+CFG["vlc"].setdefault("volume", 100)
 CFG["vlc"].setdefault("network_caching", 300)
+CFG["vlc"].setdefault("audio_language", "es,en,spa")
+CFG["vlc"].setdefault("sub_language", "es,en,spa")
 CFG["vlc"].setdefault("loop", False)
 CFG["vlc"].setdefault("shuffle", False)
+CFG.setdefault("auto_ads", {})
+CFG["auto_ads"].setdefault("min_program_tail_seconds", 90)
+CFG.setdefault("host", "127.0.0.1")
+CFG.setdefault("port", 8088)
+CFG.setdefault("channel", {"name": "MOVIES HD", "source": "VLC"})
+CFG["channel"].setdefault("source", CFG["vlc"]["source"])
 CFG.setdefault("title_overlay", {})
+CFG.setdefault("logo", {})
 CFG["title_overlay"].setdefault("enabled", False)
 CFG["title_overlay"].setdefault("scene", "")
 CFG["title_overlay"].setdefault("source", "")
@@ -43,18 +59,50 @@ CFG["tmdb"].setdefault("language", "es-MX")
 CFG["tmdb"].setdefault("region", "MX")
 CFG["tmdb"].setdefault("last_error", "")
 DB=BASE/"tvplayout.db"; EXTS={".mkv",".mp4",".m4v",".mov",".avi",".webm",".ts",".m2ts",".mts"}
-OBS_LOCK=threading.Lock()
-LIVE_RELOAD_LOCK=threading.Lock()
-OBS_CLIENT=None
-OBS_CLIENT_KEY=None
-STATE={"obs_connected":False,"obs_last_ok":0,"obs_last_error":None,
-    "obs_failures":0,
-    "obs_last_check":0.0,"obs_scenes":[],
-       "vlc_ready":False,"vlc_error":None,
+STATE={"vlc_ready":False,"vlc_error":None,"vlc_state":"idle",
        "scanner":{"running":False,"paused":False,"folder":"","found":0,"analyzed":0,"pending":0,"errors":[],"started":None,"finished":None},
-       "current":None,"next":None,"upcoming":[],"obs_connected":False,"last_error":None,"logo_on":False,"ad_break":False,
-       "mode":"IDLE","title_overlay_on":False,"title_overlay_key":"","title_overlay_text":""}
-app=FastAPI(title="TVPlayout 15.8 PRO · VLC/OBS")
+       "current":None,"next":None,"upcoming":[],"obs_connected":False,
+       "last_error":None,"ad_break":False,"mode":"IDLE","interrupted_title":None}
+
+# ---------------------------------------------------------------------------
+# Motor VLC directo (sustituye a OBS WebSocket)
+# ---------------------------------------------------------------------------
+PLAYER=None
+PLAYER_LOCK=threading.Lock()
+ENGINE=None
+ENGINE_LOCK=threading.Lock()
+VLC_INFO={"ok":False,"error":"","lib_dir":"","lib_file":"","module_available":False,"vlc_version":""}
+
+def get_player():
+    """Devuelve (y arranca la primera vez) el reproductor VLC del playout."""
+    global PLAYER
+    if PLAYER is None:
+        with PLAYER_LOCK:
+            if PLAYER is None:
+                PLAYER=build_player(CFG)
+                ok,err=PLAYER.connect()
+                VLC_INFO.update({"ok":bool(ok),"error":err or ""})
+    return PLAYER
+
+def get_engine():
+    global ENGINE
+    if ENGINE is None:
+        with ENGINE_LOCK:
+            if ENGINE is None:
+                ENGINE=PlayoutEngine(CFG, DB, get_player(), base_dir=BASE)
+    return ENGINE
+
+def vlc_info():
+    r=resolve_vlc(CFG)
+    VLC_INFO.update({"module_available":bool(r.get("module_available",False)),
+                     "lib_dir":r.get("lib_dir","") or VLC_INFO.get("lib_dir",""),
+                     "lib_file":r.get("lib_file","") or VLC_INFO.get("lib_file",""),
+                     "vlc_version":r.get("vlc_version","") or VLC_INFO.get("vlc_version","")})
+    if r.get("error") and not VLC_INFO.get("ok"):
+        VLC_INFO["error"]=r["error"]
+    return dict(VLC_INFO)
+
+app=FastAPI(title="TVPlayout VLC PRO · Playout por VLC")
 templates=Jinja2Templates(directory=str(BASE/"templates"))
 
 def safe_fromjson(value):
@@ -110,7 +158,6 @@ def clean_display_title(value):
     x=re.sub(r"\s+(19|20)\d{2}\s*$", "", x)
     x=re.sub(r"\s+", " ", x).strip(" -_")
     return x or str(value or "").strip()
-
 
 def tmdb_config():
     return CFG.get("tmdb", {})
@@ -234,11 +281,9 @@ async def tmdb_worker():
                         TMDB_STATS["found"]+=1
                         cur=STATE.get("current") or {}
                         if int(cur.get("media_id") or 0)==int(ids[0]):
-                            try:
-                                update_title_overlay(cur)
-                                update_title_assets(cur)
-                            except Exception:
-                                pass
+                            # El título del evento al aire se actualiza vía
+                            # tmdb_display_title en la siguiente lectura.
+                            pass
                     elif st=="not_found": TMDB_STATS["not_found"]+=1
                     elif st=="error":
                         TMDB_STATS["errors"]+=1; TMDB_STATS["last_error"]=result.get("error","")
@@ -255,22 +300,6 @@ async def tmdb_worker():
         except Exception as e:
             TMDB_STATS["last_error"]=str(e); TMDB_STATS["errors"]+=1
             await asyncio.sleep(2)
-
-def wrap_broadcast_title(value, max_chars=20):
-    """Wrap a movie title on word boundaries for an OBS text source."""
-    title=clean_display_title(value)
-    max_chars=max(8,int(max_chars or 20))
-    words=title.split()
-    if not words: return ""
-    lines=[]; line=""
-    for word in words:
-        candidate=word if not line else line+" "+word
-        if line and len(candidate)>max_chars:
-            lines.append(line); line=word
-        else:
-            line=candidate
-    if line: lines.append(line)
-    return "\n".join(lines)
 
 def normalize_existing_titles():
     c=db()
@@ -407,58 +436,6 @@ def external_subs(p):
     # Prefer language-coded files but do not require the media basename to match.
     return sorted(candidates, key=lambda x: (0 if x["language"]=="es" else 1 if x["language"]=="en" else 2, x["title"].lower()))
 
-def _selected_external_subtitle(row, sub_idx):
-    try:
-        si=int(sub_idx)
-    except Exception:
-        si=-1
-    if si < 0:
-        return None
-    subs=safe_fromjson(row.get("subs_json","[]") if hasattr(row,"get") else "[]")
-    if 0 <= si < len(subs):
-        item=dict(subs[si] or {})
-        if item.get("external"):
-            p=Path(str(item.get("path") or ""))
-            if p.exists():
-                return item
-    # Refresh from disk so files added after the global scan are visible.
-    found=external_subs(Path(str(row.get("path") or "")))
-    if not found:
-        return None
-    wanted_lang=""
-    if 0 <= si < len(subs):
-        wanted_lang=str((subs[si] or {}).get("language") or "").lower()
-    if wanted_lang:
-        for item in found:
-            if item.get("language")==wanted_lang:
-                return item
-    return found[0]
-
-def _subtitle_utf8_path(src_path):
-    """Return a cached UTF-8 copy for text subtitles; never alter the original."""
-    p=Path(str(src_path))
-    if not p.exists():
-        raise FileNotFoundError(str(p))
-    raw=p.read_bytes()
-    # UTF-8 with/without BOM first; then common Windows subtitle encodings.
-    text=None
-    for enc in ("utf-8-sig","utf-8","cp1252","latin-1"):
-        try:
-            text=raw.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    if text is None:
-        text=raw.decode("latin-1","replace")
-    cache=BASE/"cache"/"subtitles"
-    cache.mkdir(parents=True,exist_ok=True)
-    key=hashlib.sha1((str(p.resolve())+"|"+str(p.stat().st_mtime_ns)+"|"+str(p.stat().st_size)).encode("utf-8","ignore")).hexdigest()[:20]
-    out=cache/f"{p.stem}.{key}.utf8{p.suffix.lower()}"
-    if not out.exists():
-        out.write_text(text,encoding="utf-8",newline="\n")
-    return str(out)
-
-
 def scan_folder(fid):
  c=db(); f=c.execute("SELECT * FROM folders WHERE id=?",(fid,)).fetchone(); c.close()
  if not f: return
@@ -502,327 +479,6 @@ def scan_folder(fid):
 def awaitable_sleep(seconds):
  time.sleep(seconds)
 
-def obs_disconnect():
-    global OBS_CLIENT, OBS_CLIENT_KEY
-    c=OBS_CLIENT
-    OBS_CLIENT=None
-    OBS_CLIENT_KEY=None
-    if c is not None:
-        try:
-            c.disconnect()
-        except Exception:
-            pass
-
-def obs_client():
-    global OBS_CLIENT, OBS_CLIENT_KEY
-    o=CFG["obs"]
-    if not o.get("password"):
-        raise RuntimeError("Configura la contraseña de OBS WebSocket.")
-    key=(str(o.get("host","127.0.0.1")), int(o.get("port",4455)), str(o.get("password","")))
-    if OBS_CLIENT is not None and OBS_CLIENT_KEY == key:
-        return OBS_CLIENT
-    obs_disconnect()
-    OBS_CLIENT=obs.ReqClient(host=key[0],port=key[1],password=key[2],timeout=3)
-    OBS_CLIENT_KEY=key
-    return OBS_CLIENT
-
-def obs_info(refresh=False):
-    """Stable OBS health check.
-
-    Avoids flashing CONNECTED/DISCONNECTED on every polling request.
-    A transient WebSocket exception is tolerated; only 3 consecutive
-    failed checks mark OBS disconnected.
-    """
-    now=time.time()
-    last_check=float(STATE.get("obs_last_check",0) or 0)
-    last_ok=float(STATE.get("obs_last_ok",0) or 0)
-    failures=int(STATE.get("obs_failures",0) or 0)
-
-    # Normal UI polling: don't touch the WebSocket more than once every 5s.
-    if not refresh and (now-last_check)<5:
-        return {
-            "connected":bool(STATE.get("obs_connected")),
-            "scenes":STATE.get("obs_scenes",[]),
-            "error":STATE.get("obs_last_error")
-        }
-
-    STATE["obs_last_check"]=now
-    try:
-        with OBS_LOCK:
-            c=obs_client()
-            c.get_version()
-
-        STATE["obs_failures"]=0
-        STATE["obs_connected"]=True
-        STATE["obs_last_ok"]=now
-        STATE["obs_last_error"]=None
-        return {"connected":True,"scenes":STATE.get("obs_scenes",[]),"error":None}
-
-    except Exception as e:
-        failures+=1
-        STATE["obs_failures"]=failures
-        STATE["obs_last_error"]=str(e)
-
-        # Keep the last known connection state during transient failures.
-        # Only close/reconnect after 3 consecutive failed checks.
-        if failures>=3:
-            obs_disconnect()
-            STATE["obs_connected"]=False
-        return {
-            "connected":bool(STATE.get("obs_connected")) if failures<3 else False,
-            "scenes":STATE.get("obs_scenes",[]),
-            "error":str(e)
-        }
-
-
-def obs_refresh_scenes():
-    try:
-        with OBS_LOCK:
-            c=obs_client()
-            resp=c.get_scene_list()
-            scenes=getattr(resp,"scenes",[]) or []
-            out=[]
-            for sc in scenes:
-                name=sc.get("sceneName") if isinstance(sc,dict) else getattr(sc,"sceneName","")
-                if not name: continue
-                sources=[]
-                try:
-                    items=c.get_scene_item_list(name)
-                    items=getattr(items,"scene_items",[]) or []
-                    for x in items:
-                        if isinstance(x,dict):
-                            sources.append(x.get("sourceName",""))
-                        else:
-                            sources.append(getattr(x,"sourceName",""))
-                except Exception:
-                    pass
-                out.append({"scene":name,"sources":[x for x in sources if x]})
-        STATE["obs_scenes"]=out
-        STATE["obs_connected"]=True
-        STATE["obs_failures"]=0
-        STATE["obs_last_check"]=time.time()
-        STATE["obs_last_ok"]=time.time()
-        STATE["obs_last_error"]=None
-        return out
-    except Exception as e:
-        STATE["obs_failures"]=int(STATE.get("obs_failures",0) or 0)+1
-        STATE["obs_last_error"]=str(e)
-        # Keep the last known scenes; don't flap the UI for a single failure.
-        return STATE.get("obs_scenes",[])
-
-
-
-def _lower_url(text):
-    cfg=CFG.get("title_overlay", {})
-    params=urllib.parse.urlencode({
-        "id": int(cfg.get("template", 3) or 3),
-        "title": str(text or ""),
-        "color1": str(cfg.get("color1", "#FFFFFF") or "#FFFFFF"),
-        "color2": str(cfg.get("color2", "#00A8FF") or "#00A8FF"),
-        "max": int(cfg.get("wrap_chars", 20) or 20),
-        "v": int(time.time()*1000),
-    })
-    return f"http://127.0.0.1:8088/overlay/lower?{params}"
-
-def obs_set_text(scene, source, text):
-    if not scene or not source: return False
-    with OBS_LOCK:
-        c=obs_client()
-        mode=str(CFG.get("title_overlay", {}).get("mode", "browser") or "browser").lower()
-        if mode == "browser":
-            c.set_input_settings(source, {"url": _lower_url(text)}, False)
-        else:
-            c.set_input_settings(source, {"text": str(text or "")}, False)
-    return True
-
-def _apply_poster_transform(c, scene, source):
-    cfg=CFG.get("title_overlay",{})
-    if not scene or not source:return
-    owner=_find_scene_item_owner(c,scene,source)
-    if not owner:return
-    owner_scene,item_id=owner
-    w=max(1,int(cfg.get("poster_width",180) or 180)); h=max(1,int(cfg.get("poster_height",260) or 260))
-    x=float(cfg.get("poster_x",80) or 80); y=float(cfg.get("poster_y",820) or 820)
-    try:
-        cur=c.get_scene_item_transform(owner_scene,item_id)
-        tr=getattr(cur,"scene_item_transform",None) or getattr(cur,"transform",None) or {}
-        if not isinstance(tr,dict): tr={}
-    except Exception: tr={}
-    # OBS transform accepts position, scale and bounds. We use bounds so the image
-    # is constrained without modifying the underlying poster file.
-    transform=dict(tr)
-    transform.update({"positionX":x,"positionY":y,"boundsWidth":float(w),"boundsHeight":float(h),
-                      "boundsType":"OBS_BOUNDS_STRETCH" if not cfg.get("poster_keep_ratio",True) else "OBS_BOUNDS_SCALE_INNER"})
-    c.set_scene_item_transform(owner_scene,item_id,transform)
-
-def update_poster_layout():
-    cfg=CFG.get("title_overlay",{})
-    if not cfg.get("poster_source") or not cfg.get("scene"):return
-    try:
-        with OBS_LOCK: _apply_poster_transform(obs_client(),cfg["scene"],cfg["poster_source"])
-    except Exception as e: STATE["last_error"]=f"Layout poster OBS: {e}"
-
-def update_title_assets(row):
-    cfg=CFG.get("title_overlay",{})
-    media_id=row.get("media_id",row.get("id"))
-    if not media_id: return
-    assets=tmdb_media_assets(media_id)
-    try:
-        if cfg.get("poster_source") and assets.get("poster_local"):
-            with OBS_LOCK:
-                c=obs_client(); c.set_input_settings(cfg["poster_source"],{"file":assets["poster_local"]},False); _apply_poster_transform(c,cfg.get("scene",""),cfg["poster_source"])
-    except Exception as e:
-        STATE["last_error"]=f"Imagen TMDB OBS: {e}"
-
-def _title_overlay_set_visible(visible):
-    cfg=CFG.get("title_overlay", {})
-    scene,source=cfg.get("scene",""),cfg.get("source","")
-    if not scene or not source: return
-    if STATE.get("title_overlay_on") == bool(visible): return
-    set_source_enabled(scene,source,bool(visible))
-    if cfg.get("poster_source"): set_source_enabled("",cfg.get("poster_source"),bool(visible)) if False else None
-    if cfg.get("poster_source") and cfg.get("scene"): set_source_enabled(cfg.get("scene"),cfg.get("poster_source"),bool(visible))
-    STATE["title_overlay_on"]=bool(visible)
-
-def update_title_overlay(row, force_visible=None):
-    cfg=CFG.get("title_overlay", {})
-    if not cfg.get("enabled"): return
-    kind=str(row.get("kind") or "PROGRAM")
-    media_id=row.get("media_id",row.get("id"))
-    display=tmdb_display_title(media_id,row.get("title") or "") if media_id else (row.get("title") or "")
-    text="" if (kind=="COMMERCIAL" and not cfg.get("show_during_ads")) else wrap_broadcast_title(display,cfg.get("wrap_chars",20))
-    key=f"{row.get('schedule_id',row.get('id',''))}:{text}"
-    try:
-        if key != STATE.get("title_overlay_key"):
-            obs_set_text(cfg.get("scene",""),cfg.get("source",""),text)
-            STATE["title_overlay_key"]=key; STATE["title_overlay_text"]=text
-            try: update_title_assets(row)
-            except Exception: pass
-        if force_visible is not None: _title_overlay_set_visible(force_visible)
-    except Exception as e: STATE["last_error"]=f"Título OBS: {e}"
-
-def tick_title_overlay(row, now):
-    cfg=CFG.get("title_overlay", {})
-    if not cfg.get("enabled") or not row: return
-    kind=str(row.get("kind") or "PROGRAM")
-    if kind=="COMMERCIAL" and not cfg.get("show_during_ads"):
-        update_title_overlay(row,False); return
-    try: elapsed=max(0.0,(now-datetime.fromisoformat(str(row.get("start_at")))).total_seconds())
-    except Exception: elapsed=0.0
-    interval=max(0,int(cfg.get("interval_minutes",15) or 0))*60
-    show_seconds=max(1,int(cfg.get("show_seconds",8) or 8))
-    update_title_overlay(row)
-    visible=True if interval<=0 else ((elapsed % interval)<show_seconds)
-    update_title_overlay(row,visible)
-
-def _find_scene_item_owner(c, scene_name, source_name, seen=None):
-    seen=seen or set()
-    if not scene_name or scene_name in seen: return None
-    seen.add(scene_name)
-    try: items=getattr(c.get_scene_item_list(scene_name),"scene_items",[]) or []
-    except Exception: items=[]
-    for item in items:
-        if isinstance(item,dict):
-            src=item.get("sourceName",""); sid=item.get("sceneItemId"); kind=str(item.get("inputKind") or "").lower()
-        else:
-            src=getattr(item,"sourceName",""); sid=getattr(item,"sceneItemId",None); kind=str(getattr(item,"inputKind","") or "").lower()
-        if src==source_name and sid is not None: return scene_name,sid
-        if src and ("scene" in kind or kind in {"scene","group"}):
-            found=_find_scene_item_owner(c,src,source_name,seen)
-            if found:return found
-    return None
-
-def set_source_enabled(scene,source,enabled):
-    if not source:return False
-    try:
-        with OBS_LOCK:
-            c=obs_client(); owner=_find_scene_item_owner(c,scene,source)
-            if not owner:
-                STATE["last_error"]=f"Fuente OBS no encontrada: {source}"; return False
-            owner_scene,item_id=owner
-            c.set_scene_item_enabled(owner_scene,item_id,bool(enabled))
-            return True
-    except Exception as e:
-        STATE["last_error"]=f"Visibilidad OBS: {e}"; return False
-
-
-
-
-
-
-
-# [REMOVED] build_playback_variant - Legacy remuxing function removed (was for HLS fallback)
-    tmp=dst.with_suffix('.tmp.mkv')
-    cmd=[ff,'-y','-hide_banner','-loglevel','error','-i',str(src),'-map','0:v:0?']
-    if aud: cmd += ['-map',f'0:a:{audio_idx}?']
-    if sub and sub.get('external'):
-        cmd += ['-i',str(sub['path']),'-map','1:0?']
-    elif sub:
-        cmd += ['-map',f"0:s:{int(sub.get('ordinal',0) or 0)}?"]
-    cmd += ['-c:v','copy']
-    if aud: cmd += ['-c:a','copy']
-    if sub: cmd += ['-c:s','copy','-metadata:s:s:0','language='+str(sub.get('language') or 'und')]
-    else: cmd += ['-sn']
-    cmd += ['-map_metadata','0','-avoid_negative_ts','make_zero',str(tmp)]
-    p=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,encoding='utf-8',errors='replace',timeout=900)
-    if p.returncode:
-        try: tmp.unlink(missing_ok=True)
-        except: pass
-        raise RuntimeError(p.stderr[-3000:] or 'FFmpeg no pudo preparar la pista seleccionada.')
-    tmp.replace(dst)
-    return str(dst)
-
-# [REMOVED] remux - Legacy remuxing wrapper removed
-
-# [REMOVED] src_row_subs - Legacy subtitle lookup for remuxing removed
-
-
-def obs_media_status(source):
-    try:
-        with OBS_LOCK:
-            c=obs_client()
-            return c.send("GetMediaInputStatus", {"inputName":source}, raw=True)
-    except Exception:
-        with OBS_LOCK:
-            obs_disconnect()
-        raise
-
-def obs_set_cursor(source, position_ms):
-    try:
-        with OBS_LOCK:
-            c=obs_client()
-            return c.send("SetMediaInputCursor", {"inputName":source,"mediaCursor":int(max(0,position_ms))}, raw=True)
-    except Exception:
-        with OBS_LOCK:
-            obs_disconnect()
-        raise
-
-def obs_play(source):
-    try:
-        with OBS_LOCK:
-            c=obs_client()
-            return c.send("TriggerMediaInputAction",
-                          {"inputName":source,
-                           "mediaAction":"OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY"}, raw=True)
-    except Exception:
-        with OBS_LOCK:
-            obs_disconnect()
-        raise
-
-def wait_and_seek(source, position_ms, tries=12):
-    # OBS must be playing or paused before SetMediaInputCursor is accepted.
-    last=None
-    for _ in range(tries):
-        try:
-            obs_play(source)
-            time.sleep(0.35)
-            last=obs_set_cursor(source, position_ms)
-            return True, last
-        except Exception as e:
-            last=str(e)
-            time.sleep(0.5)
-    return False, last
-
 def find_current_scheduled_event(now=None):
     now = now or datetime.now()
     stamp=now.strftime("%Y-%m-%dT%H:%M:%S")
@@ -858,153 +514,72 @@ def find_upcoming_scheduled_events(now=None, limit=5):
     c.close()
     return rows
 
-def mark_event_playing(event_id):
-    c=db()
-    c.execute("UPDATE schedule SET status='playing' WHERE id=?",(event_id,))
-    c.commit();c.close()
-
-def mark_event_played(event_id):
-    c=db()
-    c.execute("UPDATE schedule SET status='played' WHERE id=?",(event_id,))
-    c.commit();c.close()
-
-
-
-
-
-
 VLC_STATUS_CACHE={"ts":0.0,"result":None}
 
-
 def verify_vlc_output(force=False):
-    """Verify VLC/OBS status, but cache UI health checks to protect OBS WebSocket."""
+    """Estado real del reproductor VLC (ya no hay fuente dentro de OBS)."""
     now=time.monotonic()
-    if not force and VLC_STATUS_CACHE["result"] is not None and now-float(VLC_STATUS_CACHE["ts"]) < 5:
+    if not force and VLC_STATUS_CACHE["result"] is not None and now-float(VLC_STATUS_CACHE["ts"]) < 2:
         return dict(VLC_STATUS_CACHE["result"])
-    scene=str(CFG.get("channel",{}).get("scene") or "")
     source=vlc_source_name()
-    result={"ready":False,"scene":scene,"source":source,
-            "connected":False,"kind":"","linked":False,"playlist":0,"error":None}
+    result={"ready":False,"scene":None,"source":source,
+            "connected":False,"kind":"libvlc","linked":True,"playlist":0,
+            "error":None,"state":"idle","uri":"","position_ms":0,"length_ms":0}
     try:
-        with OBS_LOCK:
-            c=obs_client()
-            c.get_version()
-            result["connected"]=True
-
-            # GetInputList gives us the actual OBS input kind.
-            raw=c.send("GetInputList",{},raw=True)
-            inputs=raw.get("inputs",[]) if isinstance(raw,dict) else []
-            item=next((x for x in inputs if x.get("inputName")==source),None)
-            if not item:
-                result["error"]=f'La fuente "{source}" no existe en OBS.'
-                return result
-            result["kind"]=str(item.get("inputKind") or "")
-            if result["kind"]!="vlc_source":
-                result["error"]=f'La fuente "{source}" no es VLC Video Source (kind={result["kind"]}).'
-                return result
-
-            # Verify it is actually inside the selected Program scene.
-            raw2=c.send("GetSceneItemList",{"sceneName":scene},raw=True)
-            items=raw2.get("sceneItems",[]) if isinstance(raw2,dict) else []
-            linked=any(x.get("sourceName")==source for x in items)
-            result["linked"]=linked
-            if not linked:
-                result["error"]=f'La fuente "{source}" existe pero no está dentro de la escena "{scene}".'
-                return result
-
-            settings=c.get_input_settings(name=source)
-            st=getattr(settings,"input_settings",{}) or {}
-            pl=st.get("playlist",[]) or []
-            result["playlist"]=len(pl)
-            result["ready"]=True
+        pl=get_player()
+        ok,err=pl.connect()
+        if not ok:
+            result["error"]=err or "VLC no disponible"
             VLC_STATUS_CACHE.update({"ts":now,"result":dict(result)})
             return result
+        snap=pl.snapshot()
+        result["connected"]=bool(snap.available)
+        result["ready"]=bool(snap.available and snap.has_input)
+        result["playlist"]=1 if snap.has_input else 0
+        result["error"]=snap.error or None
+        result["state"]=snap.state
+        result["uri"]=snap.uri
+        result["position_ms"]=snap.position_ms
+        result["length_ms"]=snap.length_ms
+        if not result["connected"] and not snap.error:
+            result["error"]="VLC no conectado"
     except Exception as e:
         result["error"]=str(e)
-        VLC_STATUS_CACHE.update({"ts":now,"result":dict(result)})
-        return result
+    STATE["vlc_ready"]=bool(result.get("ready"))
+    STATE["vlc_error"]=result.get("error")
+    VLC_STATUS_CACHE.update({"ts":now,"result":dict(result)})
+    return result
 
-def ensure_vlc_obs_source():
-    """Prepare/verify the user-selected OBS scene + VLC Video Source."""
+def ensure_vlc_player():
+    """Arranca/verifica el reproductor VLC y deja lista la salida de playout.
+
+    (Nombre conservado por compatibilidad con los endpoints: ya no se prepara
+    ninguna escena ni fuente dentro de OBS.)
+    """
     source=vlc_source_name()
-    scene=str(CFG.get("channel",{}).get("scene") or "LIVE PROGRAM")
-    result={"ok":False,"scene":scene,"source":source,"created_scene":False,
-            "created_source":False,"linked":False,"error":None}
+    result={"ok":False,"scene":None,"source":source,"created_scene":False,
+            "created_source":False,"linked":True,"error":None}
     try:
-        with OBS_LOCK:
-            c=obs_client()
-
-            # Use raw OBS WebSocket requests to avoid obsws-python keyword
-            # differences between installed versions.
-            def req(request_type, request_data=None):
-                try:
-                    r=c.send(request_type, request_data or {}, raw=True)
-                    return r if isinstance(r,dict) else {}
-                except TypeError:
-                    # Older wrapper may not accept raw=True.
-                    r=c.send(request_type, request_data or {})
-                    return getattr(r,"datain",{}) or getattr(r,"data",{}) or {}
-
-            # Check scene.
-            scenes=req("GetSceneList")
-            scene_exists=any(x.get("sceneName")==scene for x in scenes.get("scenes",[]))
-            if not scene_exists:
-                req("CreateScene",{"sceneName":scene})
-                result["created_scene"]=True
-
-            # Check input.
-            inputs=req("GetInputList")
-            inp=next((x for x in inputs.get("inputs",[]) if x.get("inputName")==source),None)
-
-            if not inp:
-                req("CreateInput",{
-                    "sceneName":scene,
-                    "inputName":source,
-                    "inputKind":"vlc_source",
-                    "inputSettings":{
-                        "playlist":[],
-                        "loop":False,
-                        "shuffle":False,
-                        "playback_behavior":"always_play",
-                        "network_caching":int(CFG.get("vlc",{}).get("network_caching",300)),
-                        "track":1,
-                        "subtitle_enable":False,
-                        "subtitle":1
-                    },
-                    "sceneItemEnabled":True
-                })
-                result["created_source"]=True
-            elif inp.get("inputKind")!="vlc_source":
-                raise RuntimeError(
-                    f'La fuente "{source}" ya existe pero no es VLC Video Source '
-                    f'(inputKind={inp.get("inputKind")}).'
-                )
-
-            # Check/link source to selected scene.
-            items=req("GetSceneItemList",{"sceneName":scene})
-            linked=any(x.get("sourceName")==source for x in items.get("sceneItems",[]))
-            if not linked:
-                req("CreateSceneItem",{"sceneName":scene,"sourceName":source})
-                result["linked"]=True
-
-            # Make selected scene the program scene.
-            try:
-                req("SetCurrentProgramScene",{"sceneName":scene})
-            except Exception:
-                pass
-
-        CFG["channel"]["scene"]=scene
-        CFG["channel"]["source"]=source
-        CFG.setdefault("vlc",{})["source"]=source
-        save_cfg()
-
-        status=verify_vlc_output()
-        result["status"]=status
-        result["ok"]=bool(status.get("ready") or status.get("connected"))
-        if not result["ok"]:
-            result["error"]=status.get("error") or "OBS no confirmó la salida VLC."
-        STATE["vlc_ready"]=bool(status.get("ready"))
-        STATE["vlc_error"]=status.get("error")
+        pl=get_player()
+        ok,err=pl.connect()
+        if not ok:
+            result["error"]=err or "VLC no disponible."
+            STATE["vlc_ready"]=False
+            STATE["vlc_error"]=result["error"]
+            return result
+        result["ok"]=True
+        STATE["vlc_ready"]=bool(pl.has_input())
+        STATE["vlc_error"]=""
+        # Si hay un evento al aire y VLC quedó vacío, dejarlo sonando.
+        try:
+            current=find_current_scheduled_event()
+            if current and not pl.has_input():
+                res=get_engine().play_scheduled_row(dict(current),0)
+                STATE["vlc_ready"]=bool(res.get("ok"))
+                STATE["vlc_error"]=res.get("error") or ""
+        except Exception:
+            pass
+        result["status"]=verify_vlc_output(True)
         return result
     except Exception as e:
         STATE["vlc_ready"]=False
@@ -1012,249 +587,38 @@ def ensure_vlc_obs_source():
         result["error"]=str(e)
         return result
 
-
 def vlc_source_name():
-    # The user chooses the actual OBS Program output source in Settings.
-    # TVPlayout uses that source as the VLC engine.
-    return str(CFG.get("channel", {}).get("source")
-               or CFG.get("vlc", {}).get("source")
-               or "PLAYOUT VLC")
-
-def _vlc_apply_settings(path, audio_index=0, subtitle_index=-1, restart=True):
-    """Load one original media file into OBS's VLC source."""
-    setup=ensure_vlc_obs_source()
-    if not setup.get("ok"):
-        raise RuntimeError("No se pudo preparar VLC Video Source en OBS: "+str(setup.get("error") or "error desconocido"))
-
-    source=vlc_source_name()
-    if not path:
-        raise RuntimeError("La película no tiene ruta.")
-    p=str(Path(path).resolve())
-
-    # OBS's VLC source expects playlist entries with a 'value' path.
-    # Include selected/hidden fields because OBS can preserve them from the UI.
-    playlist=[{"value":p,"hidden":False,"selected":True}]
-    settings={
-        "playlist":playlist,
-        "loop":False,
-        "shuffle":False,
-        "playback_behavior":"always_play",
-        "network_caching":int(CFG.get("vlc",{}).get("network_caching",300)),
-        "track":int(audio_index)+1,
-        "subtitle_enable":int(subtitle_index)>=0,
-        "subtitle":int(subtitle_index)+1 if int(subtitle_index)>=0 else 1,
-    }
-
-    with OBS_LOCK:
-        c=obs_client()
-        c.set_input_settings(source,settings,False)
-
-        # Verify OBS actually accepted the playlist.
-        check=c.get_input_settings(name=source)
-        accepted=getattr(check,"input_settings",{}) or {}
-        accepted_playlist=accepted.get("playlist",[])
-        if not accepted_playlist:
-            raise RuntimeError("OBS no aceptó la playlist VLC. La fuente PLAYOUT VLC quedó vacía.")
-
-        # Make sure the source is the active program scene.
-        try:
-            c.set_current_program_scene(scene_name=str(CFG.get("channel",{}).get("scene") or "LIVE PROGRAM"))
-        except Exception:
-            pass
-
-        if restart:
-            try:
-                c.trigger_media_input_action(
-                    source,"OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
-                )
-            except Exception:
-                # A fresh playlist normally starts automatically with always_play.
-                pass
-
-    return {"ok":True,"source":source,"path":p,
-            "audio_track":settings["track"],
-            "subtitle_track":settings["subtitle"],
-            "subtitle_enabled":settings["subtitle_enable"],
-            "playlist":accepted_playlist}
-
-
-
-def _scheduler_live_cursor(row):
-    """Return milliseconds elapsed since the Scheduler event start."""
-    try:
-        start=row.get("start_at") or row.get("start")
-        if not start:
-            return 0
-        dt=datetime.fromisoformat(str(start).replace("Z",""))
-        elapsed=max(0,(datetime.now()-dt).total_seconds()*1000.0)
-        duration=float(row.get("duration") or 0)*1000.0
-        if duration>0:
-            elapsed=min(elapsed,max(0,duration-500))
-        return int(elapsed)
-    except Exception:
-        return 0
-
-def _vlc_media_status(source):
-    """Read actual OBS VLC media duration/cursor."""
-    with OBS_LOCK:
-        c=obs_client()
-        try:
-            r=c.send("GetMediaInputStatus",{"inputName":source},raw=True)
-            if isinstance(r,dict):
-                return r
-        except Exception:
-            pass
-        try:
-            r=c.get_media_input_status(input_name=source)
-            return {
-                "mediaState":getattr(r,"media_state",getattr(r,"mediaState","")),
-                "mediaDuration":getattr(r,"media_duration",getattr(r,"mediaDuration",0)),
-                "mediaCursor":getattr(r,"media_cursor",getattr(r,"mediaCursor",0)),
-            }
-        except Exception as e:
-            return {"error":str(e)}
-    return {}
-
-def _vlc_seek_cursor(source,cursor_ms):
-    """Seek OBS VLC Video Source. OBS expects mediaCursor in INTEGER ms."""
-    target=max(0,int(cursor_ms or 0))
-    last_error=None
-
-    # Wait briefly for VLC to expose a duration after a new playlist is loaded.
-    import time as _time
-    for _ in range(30):
-        try:
-            st=_vlc_media_status(source)
-            if int(st.get("mediaDuration",0) or 0)>0:
-                break
-        except Exception:
-            pass
-        _time.sleep(0.10)
-
-    with OBS_LOCK:
-        c=obs_client()
-        try:
-            r=c.send("SetMediaInputCursor",{
-                "inputName":source,
-                "mediaCursor":target
-            },raw=True)
-            # OBS acknowledges the request even if a media source is not ready;
-            # verify the actual cursor after the request.
-        except Exception as e:
-            last_error=str(e)
-
-        if last_error:
-            try:
-                c.set_media_input_cursor(
-                    input_name=source,
-                    media_cursor=target
-                )
-                last_error=None
-            except Exception as e:
-                last_error=str(e)
-
-    # Verify actual cursor, allowing a small tolerance.
-    for _ in range(20):
-        _time.sleep(0.10)
-        st=_vlc_media_status(source)
-        actual=int(st.get("mediaCursor",0) or 0)
-        if abs(actual-target)<=1500:
-            return {"ok":True,"target_ms":target,"actual_ms":actual,"status":st}
-    st=_vlc_media_status(source)
-    actual=int(st.get("mediaCursor",0) or 0)
-    return {"ok":False,"target_ms":target,"actual_ms":actual,
-            "error":last_error or "OBS VLC no alcanzó la posición solicitada.",
-            "status":st}
-
+    # En la arquitectura VLC directo no hay "fuente": devolvemos la etiqueta
+    # del reproductor para no romper campos de estado existentes.
+    return "VLC"
 
 def _vlc_action(action):
-    source=vlc_source_name()
-
-    # If Play/Restart is requested and the source is empty, load the scheduled
-    # current event instead of merely sending PLAY to an empty VLC playlist.
-    if action in {
-        "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY",
-        "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
-    }:
-        try:
-            with OBS_LOCK:
-                c=obs_client()
-                st=c.get_input_settings(name=source)
-                settings=getattr(st,"input_settings",{}) or {}
-            if not settings.get("playlist"):
-                current=find_current_scheduled_event()
-                if current:
-                    return _vlc_apply_settings(
-                        current["path"],
-                        int(current.get("audio_index") or 0),
-                        int(current.get("subtitle_index") if current.get("subtitle_index") is not None else -1),
-                        restart=True
-                    )
-        except Exception:
-            pass
-
-    with OBS_LOCK:
-        c=obs_client()
-        c.trigger_media_input_action(source,action)
-    return {"ok":True,"source":source,"action":action}
-
+    """Acciones del operador: play/pause/stop/restart/next/previous."""
+    eng=get_engine()
+    if action in ("play","pause"):
+        return eng.action_play_pause()
+    if action=="stop":
+        return eng.action_stop()
+    if action=="restart":
+        return eng.action_restart()
+    if action=="next":
+        return eng.action_next()
+    if action=="previous":
+        return eng.action_previous()
+    return {"ok":False,"error":"Acción VLC no válida"}
 
 def play_row(row, resume_ms=0):
-    """Put the scheduled movie on air using OBS VLC Video Source and the original MKV."""
+    """Pone un evento al aire usando el reproductor VLC (sin OBS)."""
     row=dict(row)
-    try:
-        row["title"]=tmdb_display_title(
-            row.get("media_id",row.get("id")), row.get("title") or ""
-        )
-    except Exception:
-        row["title"]=clean_display_title(row.get("title") or "")
-    if not CFG.get("vlc",{}).get("enabled",True):
-        raise RuntimeError("Motor VLC deshabilitado.")
-    ai=int(row.get("audio_index") or 0)
-    si=int(row.get("subtitle_index") if row.get("subtitle_index") is not None else -1)
-    scheduler_cursor=_scheduler_live_cursor(row)
-    target_cursor=int(resume_ms or 0) if int(resume_ms or 0)>0 else scheduler_cursor
-    _vlc_apply_settings(row.get("path"),ai,si,restart=True)
-    seek_result={"ok":True,"target_ms":0,"actual_ms":0}
-    if target_cursor>0:
-        seek_result=_vlc_seek_cursor(vlc_source_name(),target_cursor)
-        if not seek_result.get("ok"):
-            raise RuntimeError(
-                "VLC no pudo sincronizar con el Scheduler: "
-                f"objetivo={target_cursor}ms, actual={seek_result.get('actual_ms',0)}ms; "
-                f"{seek_result.get('error','')}"
-            )
-    kind=row["kind"]
-    STATE.update(current={
-        "schedule_id":row.get("schedule_id",row.get("id")),
-        "media_id":row.get("media_id",row.get("id")),
-        "title":row["title"],
-        "duration":float(row["duration"] or 0),
-        "audio_index":ai,
-        "subtitle_index":si,
-        "kind":kind,
-        "position_ms":int(target_cursor),
-        "vlc_source":vlc_source_name()
-    },mode=kind,last_error=None)
-    update_title_overlay(row)
-    mark_event_playing(row.get("schedule_id",row.get("id")))
-
-    if kind=="COMMERCIAL" and CFG["logo"].get("show_during_ads"):
-        set_source_enabled(CFG["logo"].get("scene",""),CFG["logo"].get("source",""),True)
-        STATE["logo_on"]=True; STATE["ad_break"]=True
-    elif STATE["logo_on"]:
-        set_source_enabled(CFG["logo"].get("scene",""),CFG["logo"].get("source",""),False)
-        STATE["logo_on"]=False; STATE["ad_break"]=False
-
-    c=db()
-    c.execute("""INSERT INTO asrun
-                 (event_time,media_id,title,kind,audio_index,subtitle_index,duration,status)
-                 VALUES(?,?,?,?,?,?,?,?)""",
-              (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-               row.get("media_id",row.get("id")),row["title"],kind,ai,si,
-               row["duration"],"PLAYED"))
-    c.commit(); c.close()
-
+    kind=str(row.get("kind") or "PROGRAM")
+    if kind=="COMMERCIAL":
+        res=get_engine().play_scheduled_row(row,int(resume_ms or 0))
+    else:
+        res=get_engine().play_scheduled_row(row,int(resume_ms or 0))
+    if res.get("error") and not res.get("ok"):
+        STATE["last_error"]=str(res["error"])
+        raise RuntimeError(res["error"])
+    return res
 
 def generate_week(start_date, mode="random", category="Movie", avoid_repeat=True, week_no=1, month=""):
     start = date.fromisoformat(start_date) if isinstance(start_date,str) else start_date
@@ -1387,333 +751,69 @@ def generate_month_weeks(month, mode="random", category="Movie", avoid_repeat=Tr
         "hours":round(sum(x["hours"] for x in results),2)
     }
 
-def next_event():
-    now=datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    c=db()
-    row=c.execute(
-        """SELECT s.*,m.title,m.duration,m.path,m.audio_json,m.subs_json
-           FROM schedule s JOIN media m ON m.id=s.media_id
-           WHERE s.status='scheduled'
-           ORDER BY s.start_at,s.id LIMIT 1"""
-    ).fetchone()
-    c.close()
-    return row
-
-def next_two_events():
-    c=db()
-    rows=c.execute(
-        """SELECT s.*,m.title,m.duration,m.path,m.audio_json,m.subs_json
-           FROM schedule s JOIN media m ON m.id=s.media_id
-           WHERE s.status='scheduled'
-           ORDER BY s.start_at,s.id LIMIT 2"""
-    ).fetchall()
-    c.close()
-    return rows
-
-# ============================================================
-# TVPlayout 13.4 - INFO/CLEAN Auto Transition Controller
-# Uses EXISTING OBS scenes only. It never creates/renames scenes.
-# ============================================================
-INFO_SCENE_HINTS = (
-    "INFO", "PROGRAM INFO", "LIVE PROGRAM INFO",
-)
-CLEAN_SCENE_HINTS = (
-    "CLEAN", "PROGRAM", "LIVE PROGRAM",
-)
-
-INFO_TRANSITION_CFG = {
-    "enabled": True,
-    "delay_after_movie_start": 5,
-    "show_seconds": 8,
-    "transition_name": "",
-    "commercial_disable": True,
-}
-INFO_TRANSITION_STATE = {
-    "schedule_id": None,
-    "mode": "clean",
-    "info_until": 0.0,
-    "movie_started_at": None,
-    "last_transition": None,
-}
-
-def _scene_names_from_obs(client):
-    try:
-        r=client.get_scene_list()
-        scenes=getattr(r,"scenes",None) or getattr(r,"scene_list",None) or []
-        out=[]
-        for x in scenes:
-            if isinstance(x,dict):
-                n=x.get("sceneName") or x.get("name")
-            else:
-                n=getattr(x,"sceneName",None) or getattr(x,"name",None)
-            if n: out.append(str(n))
-        return out
-    except Exception:
-        return []
-
-def _pick_existing_scene(names, hints, exclude=None):
-    exclude=exclude or set()
-    # Exact/contains matching, preferring the most specific name.
-    scored=[]
-    for n in names:
-        if n in exclude: continue
-        u=n.upper()
-        score=0
-        for h in hints:
-            if u==h: score=max(score,100)
-            elif h in u: score=max(score,80)
-        if score: scored.append((score,-len(n),n))
-    scored.sort(reverse=True)
-    return scored[0][2] if scored else ""
-
-def _resolve_info_clean_scenes():
-    client=_tvp_obs_client() if "_tvp_obs_client" in globals() else None
-    if not client:
-        try: client=obs_client()
-        except Exception: return "", ""
-    names=_scene_names_from_obs(client)
-    if not names: return "", ""
-    info=_pick_existing_scene(names, INFO_SCENE_HINTS)
-    clean=_pick_existing_scene(names, CLEAN_SCENE_HINTS, {info} if info else set())
-    return clean,info
-
-def _obs_transition_to(scene_name):
-    client=_tvp_obs_client() if "_tvp_obs_client" in globals() else None
-    if not client or not scene_name: return False
-    try:
-        client.set_current_program_scene(scene_name=scene_name)
-        return True
-    except Exception:
-        return False
-
-def _obs_set_preview(scene_name):
-    client=_tvp_obs_client() if "_tvp_obs_client" in globals() else None
-    if not client or not scene_name: return False
-    try:
-        client.set_current_preview_scene(scene_name=scene_name)
-        return True
-    except Exception:
-        return False
-
-def _obs_do_transition(transition_name=""):
-    client=_tvp_obs_client() if "_tvp_obs_client" in globals() else None
-    if not client: return False
-    try:
-        if transition_name:
-            try:
-                client.set_current_scene_transition(transition_name=transition_name)
-            except Exception:
-                pass
-        client.trigger_transition()
-        return True
-    except Exception:
-        return False
-
-def _set_program_scene_safely(scene_name):
-    client=_tvp_obs_client() if "_tvp_obs_client" in globals() else None
-    if not client or not scene_name: return False
-    try:
-        # If Studio Mode is active, use Preview + Transition.
-        status=client.get_studio_mode_enabled()
-        enabled=bool(getattr(status,"studio_mode_enabled",False))
-        if enabled:
-            client.set_current_preview_scene(scene_name=scene_name)
-            _obs_do_transition(INFO_TRANSITION_CFG.get("transition_name",""))
-        else:
-            client.set_current_program_scene(scene_name=scene_name)
-        return True
-    except Exception:
-        try:
-            client.set_current_program_scene(scene_name=scene_name)
-            return True
-        except Exception:
-            return False
-
-def _info_auto_transition(row, now):
-    if not INFO_TRANSITION_CFG["enabled"] or not row:
-        return
-    kind=str(row.get("kind") or "PROGRAM").upper()
-    sid=row.get("schedule_id",row.get("id"))
-    if sid != INFO_TRANSITION_STATE.get("schedule_id"):
-        INFO_TRANSITION_STATE["schedule_id"]=sid
-        INFO_TRANSITION_STATE["mode"]="clean"
-        INFO_TRANSITION_STATE["info_until"]=0.0
-        INFO_TRANSITION_STATE["movie_started_at"]=time.monotonic()
-        INFO_TRANSITION_STATE["last_transition"]=None
-
-    if kind=="COMMERCIAL" and INFO_TRANSITION_CFG["commercial_disable"]:
-        if INFO_TRANSITION_STATE["mode"]!="clean":
-            clean,info=_resolve_info_clean_scenes()
-            if clean:
-                _set_program_scene_safely(clean)
-            INFO_TRANSITION_STATE["mode"]="clean"
-        return
-
-    if kind!="PROGRAM":
-        return
-
-    elapsed=time.monotonic()-float(INFO_TRANSITION_STATE.get("movie_started_at") or time.monotonic())
-    delay=float(INFO_TRANSITION_CFG["delay_after_movie_start"])
-    show=float(INFO_TRANSITION_CFG["show_seconds"])
-
-    # Movie start: CLEAN -> INFO after delay.
-    if INFO_TRANSITION_STATE["mode"]=="clean" and elapsed>=delay:
-        clean,info=_resolve_info_clean_scenes()
-        if info:
-            if _set_program_scene_safely(info):
-                INFO_TRANSITION_STATE["mode"]="info"
-                INFO_TRANSITION_STATE["info_until"]=time.monotonic()+show
-                INFO_TRANSITION_STATE["last_transition"]="to_info"
-        return
-
-    # INFO -> CLEAN after show duration.
-    if INFO_TRANSITION_STATE["mode"]=="info" and time.monotonic()>=INFO_TRANSITION_STATE["info_until"]:
-        clean,info=_resolve_info_clean_scenes()
-        if clean:
-            if _set_program_scene_safely(clean):
-                INFO_TRANSITION_STATE["mode"]="clean"
-                INFO_TRANSITION_STATE["last_transition"]="to_clean"
-
-
 async def engine():
-    last_event_id=None
-    obs_was_ok=False
-    obs_failures=0
+    """Bucle de playout: el Scheduler manda; VLC reproduce (ya sin OBS).
 
-    # The Scheduler clock is authoritative. On application startup, if a
-    # movie is already in progress, load it directly at its scheduled cursor.
-    try:
-        current=find_current_scheduled_event()
-        if current:
-            start_dt=datetime.fromisoformat(current["start_at"])
-            offset_ms=max(0,int((datetime.now()-start_dt).total_seconds()*1000))
-            if offset_ms < int(float(current["duration"])*1000):
-                play_row(current,resume_ms=offset_ms)
-                last_event_id=current["id"]
-    except Exception as e:
-        STATE["last_error"]=f"Inicio del playout: {e}"
-
-    while True:
-        try:
-            now=datetime.now()
-            current=find_current_scheduled_event(now)
-
-            if current:
-                if last_event_id != current["id"]:
-                    elapsed_ms=max(0,int((now-datetime.fromisoformat(current["start_at"])).total_seconds()*1000))
-                    duration_ms=int(float(current["duration"] or 0)*1000)
-                    resume_ms=elapsed_ms if 0 < elapsed_ms < duration_ms else 0
-                    play_row(current,resume_ms=resume_ms)
-                    last_event_id=current["id"]
-                    obs_was_ok=True
-                    obs_failures=0
-
-                # Lightweight OBS health check is cached by obs_info().
-                try:
-                    obs_info_live=obs_info()
-                    STATE["obs_connected"]=bool(obs_info_live.get("connected",True))
-                    tick_title_overlay(dict(current), now)
-                except Exception as e:
-                    obs_failures += 1
-                    STATE["obs_last_error"]=str(e)
-                    if obs_failures >= 3:
-                        STATE["obs_connected"]=False
-                    else:
-                        STATE["obs_connected"]=True
-            else:
-                last_event_id=None
-                obs_was_ok=False
-                obs_failures=0
-
-            nxt=find_next_scheduled_event(now)
-            upcoming=find_upcoming_scheduled_events(now,5)
-            STATE["next"]={
-                "title":nxt["title"],"start_at":nxt["start_at"],
-                "end_at":nxt["end_at"],"duration":nxt["duration"],"kind":nxt["kind"]
-            } if nxt else None
-            STATE["upcoming"]=[{
-                "id":r["id"],"title":r["title"],"start_at":r["start_at"],
-                "end_at":r["end_at"],"duration":r["duration"],"kind":r["kind"]
-            } for r in upcoming]
-
-        except Exception as e:
-            STATE["last_error"]=str(e)
-
-        await asyncio.sleep(0.5)
-
-
-async def vlc_startup_setup():
-    for _ in range(20):
-        try:
-            if obs_info(refresh=True).get("connected"):
-                await asyncio.to_thread(ensure_vlc_obs_source)
-                current=await asyncio.to_thread(find_current_scheduled_event)
-                if current:
-                    try:
-                        await asyncio.to_thread(play_row,dict(current),0)
-                    except Exception as e:
-                        STATE["vlc_error"]=str(e)
-                return
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-
-def disable_obsolete_program_sources():
-    """Disable legacy program sources that are no longer used by TVPlayout.
-
-    The source is only disabled, never deleted, so an existing OBS scene can be
-    restored manually if needed. The current playout uses the configured VLC
-    Video Source directly.
+    El motor nuevo (engines/playout_engine) decide cuándo cargar la película
+    siguiente, interrumpir para tanda comercial y reanudar en el punto exacto.
+    Aquí solo lo conducimos y reflejamos su estado en STATE para la UI.
     """
-    legacy_names={"Program live","PROGRAM LIVE","Program Live"}
-    disabled=[]
+    eng=get_engine()
     try:
-        with OBS_LOCK:
-            c=obs_client()
-            scenes_resp=c.get_scene_list()
-            scenes=getattr(scenes_resp,"scenes",[]) or []
-            for sc in scenes:
-                scene=sc.get("sceneName") if isinstance(sc,dict) else getattr(sc,"sceneName","")
-                if not scene:
-                    continue
-                try:
-                    items=c.get_scene_item_list(scene_name=scene)
-                    raw=getattr(items,"scene_items",[]) or []
-                except Exception:
-                    raw=[]
-                for item in raw:
-                    if isinstance(item,dict):
-                        name=item.get("sourceName") or item.get("source_name")
-                        sid=item.get("sceneItemId") or item.get("scene_item_id")
-                    else:
-                        name=getattr(item,"sourceName",getattr(item,"source_name",None))
-                        sid=getattr(item,"sceneItemId",getattr(item,"scene_item_id",None))
-                    if name in legacy_names and sid is not None:
-                        try:
-                            c.set_scene_item_enabled(scene_name=scene,scene_item_id=int(sid),scene_item_enabled=False)
-                            disabled.append(f"{scene}/{name}")
-                        except Exception:
-                            pass
+        verify_vlc_output(True)
     except Exception:
         pass
-    return disabled
+    while True:
+        try:
+            eng.tick()
+        except Exception as e:
+            STATE["last_error"]=f"playout: {e}"
+        try:
+            snap=eng.snapshot()
+            STATE.update({
+                "mode":snap.get("mode") or "IDLE",
+                "current":snap.get("current"),
+                "next":snap.get("next"),
+                "upcoming":snap.get("upcoming") or [],
+                "ad_break":bool(snap.get("ad_break")),
+                "interrupted_title":snap.get("interrupted_title"),
+            })
+            p=snap.get("player") or {}
+            # claves heredadas para no romper lecturas antiguas de la UI
+            STATE["obs_connected"]=bool(p.get("available",False))
+            STATE["vlc_ready"]=bool(p.get("available",False) and p.get("has_input",False))
+            STATE["vlc_error"]=p.get("error") or ""
+            STATE["vlc_state"]=p.get("state") or "idle"
+            if p.get("position_ms") is not None and (STATE.get("current") or {}):
+                try:
+                    STATE["current"]["position_ms"]=int(p.get("position_ms") or 0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
 
+async def ads_maintainer():
+    """Mantiene insertadas las tandas AUTO_ADS de las próximas horas."""
+    eng=get_engine()
+    while True:
+        try:
+            eng.maintain_auto_ads()
+        except Exception:
+            pass
+        await asyncio.sleep(45)
 
 @app.on_event("startup")
 async def startup():
- global TMDB_TASK
- init_db()
- normalize_existing_titles()
- try:
-  disable_obsolete_program_sources()
- except Exception:
-  pass
- # TMDB worker must be started at application startup. Without this task,
- # /tmdb/run only sets an Event that no coroutine ever consumes, so no
- # search/download can occur.
- if TMDB_TASK is None or TMDB_TASK.done():
-  TMDB_TASK = asyncio.create_task(tmdb_worker())
- asyncio.create_task(engine())
+    global TMDB_TASK
+    init_db()
+    normalize_existing_titles()
+    # TMDB worker: /tmdb/run solo marca un Event; sin esta tarea nunca
+    # se procesarían las búsquedas.
+    if TMDB_TASK is None or TMDB_TASK.done():
+        TMDB_TASK = asyncio.create_task(tmdb_worker())
+    asyncio.create_task(engine())
+    asyncio.create_task(ads_maintainer())
 
 @app.get("/",response_class=HTMLResponse)
 async def home(request:Request,tab:str="playout"):
@@ -1725,6 +825,9 @@ async def home(request:Request,tab:str="playout"):
             sched=c.execute("""SELECT s.*,m.title,m.duration,m.audio_json,m.subs_json
                                FROM schedule s JOIN media m ON m.id=s.media_id
                                ORDER BY s.start_at LIMIT 20""").fetchall()
+            media=c.execute("""SELECT * FROM media
+                               WHERE enabled=1 AND category IN ('Commercial','Promo')
+                               ORDER BY title LIMIT 500""").fetchall()
         elif tab=="playout":
             sched=c.execute("""SELECT s.*,m.title,m.duration,m.audio_json,m.subs_json
                                FROM schedule s JOIN media m ON m.id=s.media_id
@@ -1740,21 +843,23 @@ async def home(request:Request,tab:str="playout"):
     folders,media,sched,asrun=await asyncio.to_thread(load_tab)
     current_event = await asyncio.to_thread(find_current_scheduled_event) if tab=="playout" else None
 
-    # WebSocket calls can be slow; only ask OBS on tabs that need it.
-    obs={"connected":bool(STATE.get("obs_connected")),"scenes":STATE.get("obs_scenes",[]),"error":STATE.get("obs_last_error")}
-    if tab in ("playout","settings","logo","tmdb"):
-        try:
-            obs=await asyncio.to_thread(obs_info,False)
-            if tab in ("settings","logo","tmdb") and not obs.get("scenes"):
-                await asyncio.to_thread(obs_refresh_scenes)
-                obs=await asyncio.to_thread(obs_info,False)
-        except Exception as e:
-            obs={"connected":False,"scenes":STATE.get("obs_scenes",[]),"error":str(e)}
+    # Estado del reproductor VLC (sin OBS). La lectura es ligera y cacheada
+    # por el propio motor; nunca bloqueamos el servidor con libvlc.
+    try:
+        vstatus=get_engine().snapshot().get("player") or {}
+    except Exception as e:
+        vstatus={"available":False,"error":str(e),"state":"idle","has_input":False,
+                 "position_ms":0,"length_ms":0,"playing":False}
+    obs={"connected":bool(vstatus.get("available")),"scenes":[],"error":vstatus.get("error")}
+    vlc_status=dict(vstatus)
+    vlc_status["source"]="VLC"
+    vlc_status["vlc_info"]=vlc_info()
 
     return templates.TemplateResponse(
         request=request,name="index.html",
         context={"tab":tab,"folders":folders,"media":media,"schedules":sched,
                  "asrun":asrun,"current_event":current_event,"state":STATE,"cfg":CFG,"obs":obs,
+                 "vstatus":vlc_status,
                  "tmdb":tmdb_stats(),
                  "today":datetime.now().strftime("%Y-%m-%d"),
                  "month":datetime.now().strftime("%Y-%m")}
@@ -1771,16 +876,8 @@ async def scan(fid:int):
 
 @app.get("/api/obs")
 async def obs_api(refresh:int=0):
-    if refresh:
-        scenes=await asyncio.to_thread(obs_refresh_scenes)
-    else:
-        scenes=STATE.get("obs_scenes",[])
-    info=await asyncio.to_thread(obs_info, bool(refresh))
-    return {"connected":info.get("connected",False),"scenes":scenes,"error":info.get("error")}
-
-@app.get("/overlay/lower", response_class=HTMLResponse)
-async def local_lower_overlay():
-    return (BASE / "templates" / "lower.html").read_text(encoding="utf-8")
+    # OBS ya no se usa: endpoint conservado para no romper lecturas antiguas.
+    return {"connected":False,"scenes":[],"error":"OBS deshabilitado: el playout usa VLC como reproductor."}
 
 @app.get("/api/tmdb")
 async def tmdb_api_status():
@@ -1835,7 +932,6 @@ def tmdb_reset_database():
                        "errors":0,"pending":0,"last_title":"","last_error":""})
     return True
 
-
 @app.post("/tmdb/reset")
 async def tmdb_reset():
     if not CFG.get("tmdb",{}).get("api_key"):
@@ -1848,7 +944,6 @@ async def tmdb_reset():
     TMDB_RUN_EVENT.set()
     return RedirectResponse("/?tab=tmdb&run=reset",303)
 
-
 @app.post("/tmdb/retry-errors")
 async def tmdb_retry_errors():
     c=db()
@@ -1856,23 +951,6 @@ async def tmdb_retry_errors():
     c.commit(); c.close()
     TMDB_RUN_EVENT.set()
     return RedirectResponse("/?tab=tmdb",303)
-
-@app.post("/config/title-overlay")
-async def config_title_overlay(scene:str=Form(""),source:str=Form(""),poster_source:str=Form(""),enabled:int=Form(0),show_during_ads:int=Form(0),interval_minutes:int=Form(15),show_seconds:int=Form(8),wrap_chars:int=Form(20),mode:str=Form("gdi"),template:int=Form(3),color1:str=Form("#FFFFFF"),color2:str=Form("#00A8FF"),poster_width:int=Form(180),poster_height:int=Form(260),poster_x:int=Form(80),poster_y:int=Form(820),poster_keep_ratio:int=Form(1),poster_crop:int=Form(0)):
-    CFG["title_overlay"].update({"scene":scene,"source":source,"poster_source":poster_source,"enabled":bool(enabled),"show_during_ads":bool(show_during_ads),"interval_minutes":max(0,interval_minutes),"show_seconds":max(1,show_seconds),"wrap_chars":max(8,wrap_chars),"mode":mode if mode in {"browser","gdi"} else "gdi","template":max(1,min(5,template)),"color1":color1 if re.fullmatch(r"#[0-9A-Fa-f]{6}",color1 or "") else "#FFFFFF","color2":color2 if re.fullmatch(r"#[0-9A-Fa-f]{6}",color2 or "") else "#00A8FF","poster_width":max(1,poster_width),"poster_height":max(1,poster_height),"poster_x":poster_x,"poster_y":poster_y,"poster_keep_ratio":bool(poster_keep_ratio),"poster_crop":bool(poster_crop)})
-    save_cfg()
-    try: update_poster_layout()
-    except Exception: pass
-    if CFG["title_overlay"].get("enabled"):
-        cur=find_current_scheduled_event()
-        if cur:
-            try: update_title_overlay(dict(cur))
-            except Exception: pass
-    return RedirectResponse("/?tab=settings",303)
-
-@app.post("/config/logo")
-async def config_logo(scene:str=Form(""),source:str=Form(""),enabled:int=Form(1)):
- CFG["logo"].update({"scene":scene,"source":source,"enabled":bool(enabled)});save_cfg();return RedirectResponse("/?tab=logo",303)
 
 @app.post("/config/ads")
 async def config_ads(enabled:int=Form(0),interval_minutes:int=Form(60),break_seconds:int=Form(180),min_ads:int=Form(1),max_ads:int=Form(4),category:str=Form("Commercial"),avoid_repeat:int=Form(1)):
@@ -1951,15 +1029,32 @@ async def playout_api():
     vstatus=await asyncio.to_thread(verify_vlc_output)
     STATE["vlc_ready"]=bool(vstatus.get("ready"))
     STATE["vlc_error"]=vstatus.get("error")
-    return {"now":now.strftime("%Y-%m-%dT%H:%M:%S"),"current":row_json(cur),"next":row_json(nxt),"upcoming":[row_json(x) for x in upcoming],"obs_connected":bool(STATE.get("obs_connected")),"vlc":{"enabled":bool(CFG.get("vlc",{}).get("enabled",True)),"source":vlc_source_name(),"scene":CFG.get("channel",{}).get("scene",""),"ready":bool(vstatus.get("ready")),"connected":bool(vstatus.get("connected")),"kind":vstatus.get("kind",""),"linked":bool(vstatus.get("linked")),"playlist":int(vstatus.get("playlist",0) or 0),"error":vstatus.get("error")}}
+    try:
+        esnap=get_engine().snapshot()
+    except Exception:
+        esnap={"mode":STATE.get("mode"),"ad_break":bool(STATE.get("ad_break")),
+               "player":{"available":False,"state":"idle","error":""}}
+    return {"now":now.strftime("%Y-%m-%dT%H:%M:%S"),"current":row_json(cur),"next":row_json(nxt),
+            "upcoming":[row_json(x) for x in upcoming],
+            "obs_connected":bool(STATE.get("obs_connected")),
+            "mode":esnap.get("mode"),"ad_break":bool(esnap.get("ad_break")),
+            "interrupted_title":esnap.get("interrupted_title"),
+            "vlc":{"enabled":bool(CFG.get("vlc",{}).get("enabled",True)),"source":vlc_source_name(),
+                   "scene":None,"ready":bool(vstatus.get("ready")),"connected":bool(vstatus.get("connected")),
+                   "kind":vstatus.get("kind","libvlc"),"linked":True,
+                   "playlist":int(vstatus.get("playlist",0) or 0),
+                   "state":vstatus.get("state"),"error":vstatus.get("error"),
+                   "player":esnap.get("player")}}
 
 @app.post("/take/{mid}")
 async def take(mid:int,audio_index:int=Form(0),subtitle_index:int=Form(-1)):
- c=db();r=c.execute("SELECT *, 'TAKE' AS kind FROM media WHERE id=?",(mid,)).fetchone();c.close()
+ c=db();r=c.execute("SELECT * FROM media WHERE id=?",(mid,)).fetchone();c.close()
  if not r:return JSONResponse({"ok":False},404)
- d=dict(r);d["audio_index"]=audio_index;d["subtitle_index"]=subtitle_index
- try:play_row(d);return RedirectResponse("/?tab=playout",303)
- except Exception as e:return JSONResponse({"ok":False,"error":str(e)},500)
+ d=dict(r)
+ res=await asyncio.to_thread(get_engine().take, d, int(audio_index), int(subtitle_index))
+ if res.get("ok"):
+     return RedirectResponse("/?tab=playout",303)
+ return JSONResponse({"ok":False,"error":res.get("error","No se pudo tomar el medio")},500)
 
 @app.post("/schedule/add")
 async def schedule_add(mid:int=Form(...), start_at:str=Form(...), audio_index:int=Form(0), subtitle_index:int=Form(-1), kind:str=Form("PROGRAM")):
@@ -2010,65 +1105,33 @@ async def media_delete(mid:int):
     c.commit();c.close()
     return RedirectResponse("/?tab=library",303)
 
-
-def current_cursor_for_source(source, fallback_ms=0):
-    try:
-        st=obs_media_status(source)
-        data=st.get("responseData",st) if isinstance(st,dict) else {}
-        cur=data.get("mediaCursor")
-        if cur is not None:
-            return max(0,int(cur))
-    except Exception:
-        pass
-    return max(0,int(fallback_ms or 0))
-
 def live_reload_tracks(row, audio_index, subtitle_index):
-    """Apply audio/subtitle selection through the OBS VLC Video Source."""
+    """Cambio de audio/subtítulos al aire, sin recargar la película (VLC)."""
     row=dict(row)
-    current=STATE.get("current") or {}
-    cursor=int(current.get("position_ms",0) or 0)
-    result=_vlc_apply_settings(
-        row.get("path"),int(audio_index),int(subtitle_index),restart=True
-    )
-    row["audio_index"]=int(audio_index)
-    row["subtitle_index"]=int(subtitle_index)
-    STATE["current"]={
-        **current,
-        "audio_index":int(audio_index),
-        "subtitle_index":int(subtitle_index),
-        "position_ms":cursor,
-        "vlc_source":vlc_source_name()
-    }
-    return {"cursor":cursor,"reloaded":True,**result}
-
+    result=get_engine().reload_tracks(dict(row), int(audio_index), int(subtitle_index))
+    if result.get("ok"):
+        current=STATE.get("current") or {}
+        STATE["current"]={
+            **current,
+            "audio_index":int(audio_index),
+            "subtitle_index":int(subtitle_index),
+            "position_ms":int(result.get("cursor",0) or 0),
+        }
+    return result
 
 @app.post("/api/vlc/sync-playout")
 async def vlc_sync_playout():
     try:
-        current=await asyncio.to_thread(find_current_scheduled_event)
-        if not current:
-            return JSONResponse({"ok":False,"error":"No hay evento al aire"},404)
-        target=await asyncio.to_thread(_scheduler_live_cursor,dict(current))
-        result=await asyncio.to_thread(_vlc_seek_cursor,vlc_source_name(),target)
-        if not result.get("ok"):
-            return JSONResponse({
-                "ok":False,
-                "error":result.get("error","No se pudo sincronizar VLC"),
-                "title":current["title"],
-                "target_ms":target,
-                "actual_ms":result.get("actual_ms",0)
-            },500)
-        STATE["current"]["position_ms"]=int(target)
-        return {
-            "ok":True,
-            "title":current["title"],
-            "target_ms":target,
-            "actual_ms":result.get("actual_ms",0),
-            "cursor_seconds":round(target/1000,2)
-        }
+        res=await asyncio.to_thread(get_engine().seek_to_scheduler)
+        if not res.get("ok"):
+            return JSONResponse({"ok":False,
+                                 "error":res.get("error","No se pudo sincronizar VLC"),
+                                 "title":res.get("title",""),"target_ms":res.get("target_ms",0),
+                                 "actual_ms":res.get("actual_ms",0)},500)
+        return {"ok":True,"title":res.get("title"),"target_ms":res.get("target_ms",0),
+                "actual_ms":res.get("actual_ms",0),"cursor_seconds":res.get("cursor_seconds",0)}
     except Exception as e:
         return JSONResponse({"ok":False,"error":str(e)},500)
-
 
 @app.post("/api/vlc/load-current")
 async def vlc_load_current():
@@ -2086,15 +1149,8 @@ async def vlc_load_current():
 @app.get("/api/vlc/sync-status")
 async def vlc_sync_status():
     try:
-        current=await asyncio.to_thread(find_current_scheduled_event)
-        if not current:
-            return {"ok":False,"error":"No hay evento al aire"}
-        target=await asyncio.to_thread(_scheduler_live_cursor,dict(current))
-        actual=await asyncio.to_thread(_vlc_media_status,vlc_source_name())
-        return {"ok":True,"title":current["title"],"target_ms":target,
-                "actual_ms":int(actual.get("mediaCursor",0) or 0),
-                "duration_ms":int(actual.get("mediaDuration",0) or 0),
-                "state":actual.get("mediaState","")}
+        res=await asyncio.to_thread(get_engine().sync_status)
+        return res
     except Exception as e:
         return {"ok":False,"error":str(e)}
 
@@ -2108,7 +1164,7 @@ async def vlc_status():
 @app.post("/api/vlc/setup")
 async def vlc_setup():
     try:
-        result=await asyncio.to_thread(ensure_vlc_obs_source)
+        result=await asyncio.to_thread(ensure_vlc_player)
         if result.get("ok"):
             result["status"]=await asyncio.to_thread(verify_vlc_output)
         return result
@@ -2117,61 +1173,77 @@ async def vlc_setup():
 
 @app.post("/api/vlc/action")
 async def vlc_action(action:str=Form(...)):
-    # Play/Pause/Stop/Restart are true VLC controls.
-    if action in {"play","pause","stop","restart"}:
-        actions={
-            "play":"OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY",
-            "pause":"OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE",
-            "stop":"OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP",
-            "restart":"OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART",
-        }
-        try:
-            return _vlc_action(actions[action])
-        except Exception as e:
-            return JSONResponse({"ok":False,"error":str(e)},500)
+    # play/pause/stop/restart/next/previous -> motor VLC (sin OBS)
+    if action not in {"play","pause","stop","restart","next","previous"}:
+        return JSONResponse({"ok":False,"error":"Acción VLC no válida"},400)
+    try:
+        res=await asyncio.to_thread(_vlc_action, action)
+        if not res.get("ok"):
+            code=500 if action in ("next","previous") else 409
+            return JSONResponse({"ok":False,"error":res.get("error","Error VLC"),
+                                 "action":action},code)
+        return {"ok":True,"action":action,
+                "scheduler_id":res.get("scheduler_id"),"title":res.get("title")}
+    except Exception as e:
+        return JSONResponse({"ok":False,"error":str(e)},500)
 
-    # NEXT is owned by the Scheduler. This prevents VLC from escaping the
-    # programmed order and guarantees that the database remains authoritative.
-    if action=="next":
-        try:
-            now=datetime.now()
-            cur=find_current_scheduled_event(now)
-            nxt=find_next_scheduled_event(now)
-            if cur:
-                mark_event_played(cur["id"])
-            if not nxt:
-                return JSONResponse({"ok":False,"error":"No hay siguiente evento programado"},404)
-            play_row(dict(nxt),resume_ms=0)
-            return {"ok":True,"action":"next","scheduler_id":nxt["id"],"title":nxt["title"]}
-        except Exception as e:
-            return JSONResponse({"ok":False,"error":str(e)},500)
+@app.post("/config/vlc")
+async def config_vlc(channel_name:str=Form(""), fullscreen:int=Form(1), volume:int=Form(100),
+                     network_caching:int=Form(300), lib_dir:str=Form(""), vlc_path:str=Form(""),
+                     audio_language:str=Form("es,en,spa"), sub_language:str=Form("es,en,spa")):
+    CFG.setdefault("vlc",{})
+    V=CFG["vlc"]
+    if channel_name.strip():
+        CFG.setdefault("channel",{})["name"]=channel_name.strip()
+    V["fullscreen"]=bool(fullscreen)
+    V["volume"]=max(0,min(200,int(volume)))
+    V["network_caching"]=max(50,int(network_caching))
+    if lib_dir.strip():
+        V["lib_dir"]=lib_dir.strip()
+    if vlc_path.strip():
+        V["path"]=vlc_path.strip()
+    V["audio_language"]=(audio_language.strip() or "es,en,spa")
+    V["sub_language"]=(sub_language.strip() or "es,en,spa")
+    save_cfg()
+    try:
+        get_player().set_volume(V["volume"])
+    except Exception:
+        pass
+    return RedirectResponse("/?tab=settings",303)
 
-    if action=="previous":
-        try:
-            now=datetime.now()
-            cur=find_current_scheduled_event(now)
-            c=db()
-            if cur:
-                prev=c.execute("""SELECT s.*,m.title,m.duration,m.path,m.audio_json,m.subs_json
-                                  FROM schedule s JOIN media m ON m.id=s.media_id
-                                  WHERE s.start_at < ? AND s.status IN ('scheduled','played')
-                                  ORDER BY s.start_at DESC LIMIT 1""",
-                               (cur["start_at"],)).fetchone()
-            else:
-                prev=c.execute("""SELECT s.*,m.title,m.duration,m.path,m.audio_json,m.subs_json
-                                  FROM schedule s JOIN media m ON m.id=s.media_id
-                                  WHERE s.start_at < ? AND s.status IN ('scheduled','played')
-                                  ORDER BY s.start_at DESC LIMIT 1""",
-                               (now.strftime("%Y-%m-%dT%H:%M:%S"),)).fetchone()
-            c.close()
-            if not prev:
-                return JSONResponse({"ok":False,"error":"No hay evento anterior"},404)
-            play_row(dict(prev),resume_ms=0)
-            return {"ok":True,"action":"previous","scheduler_id":prev["id"],"title":prev["title"]}
-        except Exception as e:
-            return JSONResponse({"ok":False,"error":str(e)},500)
+@app.post("/api/vlc/start")
+async def vlc_start():
+    try:
+        res=await asyncio.to_thread(ensure_vlc_player)
+        return {"ok":bool(res.get("ok")),"error":res.get("error"),"source":"VLC"}
+    except Exception as e:
+        return JSONResponse({"ok":False,"error":str(e)},500)
 
-    return JSONResponse({"ok":False,"error":"Acción VLC no válida"},400)
+@app.post("/api/vlc/stop")
+async def vlc_stop():
+    try:
+        res=await asyncio.to_thread(get_player().stop)
+        return {"ok":bool(res.get("ok")),"error":res.get("error")}
+    except Exception as e:
+        return JSONResponse({"ok":False,"error":str(e)},500)
+
+@app.post("/api/ads/cut-now")
+async def ads_cut_now():
+    res=await asyncio.to_thread(get_engine().ad_cut_now)
+    if res.get("ok"):
+        return res
+    return JSONResponse({"ok":False,"error":res.get("error","No se pudo cortar")},409)
+
+@app.post("/api/ads/skip")
+async def ads_skip():
+    res=await asyncio.to_thread(get_engine().ad_skip)
+    if res.get("ok"):
+        return res
+    return JSONResponse({"ok":False,"error":res.get("error","No hay tanda en el aire")},409)
+
+@app.get("/api/vlc/info")
+async def vlc_info_api():
+    return vlc_info()
 
 @app.post("/schedule/update")
 async def schedule_update(sid:int=Form(...), start_at:str=Form(...), audio_index:int=Form(0), subtitle_index:int=Form(-1), kind:str=Form("PROGRAM")):
@@ -2213,110 +1285,10 @@ async def schedule_update(sid:int=Form(...), start_at:str=Form(...), audio_index
 
     return RedirectResponse("/?tab=scheduler",303)
 
-
 # ============================================================
 # TVPlayout OBS Scene Manager
 # Crea/repara las escenas estándar sin duplicar Multimedia.
 # ============================================================
-TVP_SCENES = {
-    "program": "TVP — PROGRAM",
-    "info": "TVP — PROGRAM INFO",
-    "commercial": "TVP — COMMERCIAL",
-}
-TVP_SOURCES = {
-    "media": "Multimedia",
-    "poster": "Poster TMDB",
-    "title": "Título GDI+",
-}
-
-def _tvp_obs_client():
-    try:
-        return obs_client()
-    except Exception:
-        return None
-
-def _tvp_source_exists(client, name):
-    try:
-        client.get_input_settings(name=name)
-        return True
-    except Exception:
-        return False
-
-def _tvp_scene_exists(client, scene):
-    try:
-        client.get_scene_item_list(scene_name=scene)
-        return True
-    except Exception:
-        return False
-
-def _tvp_ensure_scenes():
-    client = _tvp_obs_client()
-    if not client:
-        return {"ok": False, "error": "OBS no conectado"}
-
-    created = []
-    linked = []
-    for scene in TVP_SCENES.values():
-        if not _tvp_scene_exists(client, scene):
-            try:
-                client.create_scene(scene_name=scene)
-                created.append(scene)
-            except Exception:
-                pass
-
-    available = {k: _tvp_source_exists(client, v) for k, v in TVP_SOURCES.items()}
-    wanted = {
-        TVP_SCENES["program"]: ["media"],
-        TVP_SCENES["info"]: ["media", "poster", "title"],
-        TVP_SCENES["commercial"]: ["media"],
-    }
-
-    for scene, keys in wanted.items():
-        try:
-            data = client.get_scene_item_list(scene_name=scene)
-            items = getattr(data, "scene_items", []) or []
-            existing = {getattr(x, "source_name", None) for x in items}
-            for key in keys:
-                name = TVP_SOURCES[key]
-                if available.get(key) and name not in existing:
-                    try:
-                        client.create_scene_item(scene_name=scene, source_name=name)
-                        linked.append(f"{scene}: {name}")
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    return {"ok": True, "created": created, "linked": linked,
-            "scenes": TVP_SCENES, "sources": available}
-
-@app.get("/api/obs/scenes")
-async def tvp_obs_scenes():
-    return _tvp_ensure_scenes()
-
-@app.post("/api/obs/scenes/ensure")
-async def tvp_obs_scenes_ensure():
-    return _tvp_ensure_scenes()
-
-@app.post("/api/obs/scenes/set")
-async def tvp_obs_scene_set(request: Request):
-    data = await request.json()
-    mode = str(data.get("mode") or "program").lower()
-    scene = TVP_SCENES.get(mode)
-    if not scene:
-        return JSONResponse({"ok": False, "error": "modo inválido"}, 400)
-    client = _tvp_obs_client()
-    if not client:
-        return JSONResponse({"ok": False, "error": "OBS no conectado"}, 503)
-    try:
-        if bool(data.get("preview", False)):
-            client.set_current_preview_scene(scene_name=scene)
-        else:
-            client.set_current_program_scene(scene_name=scene)
-        return {"ok": True, "scene": scene, "mode": mode}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, 500)
-
 @app.get("/api/schedule")
 async def schedule_api(page:int=1, per_page:int=20, q:str="", day:str=""):
     page=max(1,page); per_page=min(50,max(10,per_page)); offset=(page-1)*per_page
@@ -2330,8 +1302,6 @@ async def schedule_api(page:int=1, per_page:int=20, q:str="", day:str=""):
             WHERE {where_sql} ORDER BY s.start_at,s.id LIMIT ? OFFSET ?""",args+[per_page,offset]).fetchall(); c.close(); return total,rows
     total,rows=await asyncio.to_thread(read)
     return {"items":[dict(r) for r in rows],"count":total,"page":page,"per_page":per_page,"pages":max(1,(total+per_page-1)//per_page)}
-
-
 
 @app.get("/api/tmdb/search")
 async def tmdb_search_api(q:str=""):
@@ -2437,28 +1407,6 @@ async def schedule_add_ad(mid:int=Form(...), start_at:str=Form(...), audio_index
     c.commit();c.close()
     return RedirectResponse("/?tab=scheduler",303)
 
-@app.post("/config/obs-output")
-async def config_obs_output(scene:str=Form(""),source:str=Form("")):
-    CFG["channel"]["scene"]=scene
-    CFG["channel"]["source"]=source
-    CFG.setdefault("vlc",{})["source"]=source
-    save_cfg()
-    # If OBS is connected, immediately verify the newly selected output.
-    try:
-        result=await asyncio.to_thread(verify_vlc_output)
-        STATE["vlc_ready"]=bool(result.get("ready"))
-        STATE["vlc_error"]=result.get("error")
-    except Exception as e:
-        STATE["vlc_ready"]=False
-        STATE["vlc_error"]=str(e)
-    return RedirectResponse("/?tab=settings",303)
-
-@app.post("/config/logo-v10")
-async def config_logo_v10(scene:str=Form(""),source:str=Form(""),enabled:int=Form(0),show_during_ads:int=Form(1)):
-    CFG["logo"].update({"scene":scene,"source":source,"enabled":bool(enabled),"show_during_ads":bool(show_during_ads)})
-    save_cfg()
-    return RedirectResponse("/?tab=logo",303)
-
 @app.get("/api/library")
 async def library_api(page:int=1, per_page:int=50, q:str=""):
     page=max(1,page); per_page=min(50,max(10,per_page)); offset=(page-1)*per_page
@@ -2488,10 +1436,16 @@ async def library_api(page:int=1, per_page:int=50, q:str=""):
 
 @app.get("/api/status")
 async def status():
+    try:
+        plinfo=await asyncio.to_thread(get_engine().player_status)
+    except Exception as e:
+        plinfo={"available":False,"error":str(e),"state":"idle","has_input":False,
+                "position_ms":0,"length_ms":0,"playing":False}
     return {
         "ok":True,
         "state":STATE,
-        "obs":obs_info(),
+        "obs":{"connected":bool(STATE.get("obs_connected")),"scenes":[],"error":None},
+        "vlc":plinfo,
         "ffmpeg":bins()[0],
         "ffprobe":bins()[1],
         "server_time":datetime.now().isoformat()
@@ -2499,21 +1453,3 @@ async def status():
 
 if __name__=="__main__":
  import uvicorn;uvicorn.run(app,host=CFG["host"],port=CFG["port"])
-
-
-@app.get("/api/obs/info-transition")
-async def obs_info_transition_status():
-    return {"ok": True, "config": dict(INFO_TRANSITION_CFG),
-            "state": dict(INFO_TRANSITION_STATE)}
-
-@app.post("/api/obs/info-transition")
-async def obs_info_transition_config(request: Request):
-    data=await request.json()
-    for k in ("enabled","commercial_disable"):
-        if k in data: INFO_TRANSITION_CFG[k]=bool(data[k])
-    for k in ("delay_after_movie_start","show_seconds"):
-        if k in data:
-            INFO_TRANSITION_CFG[k]=max(1,int(data[k]))
-    if "transition_name" in data:
-        INFO_TRANSITION_CFG["transition_name"]=str(data["transition_name"] or "")
-    return {"ok": True, "config": dict(INFO_TRANSITION_CFG)}

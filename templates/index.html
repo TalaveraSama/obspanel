@@ -1,9 +1,9 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TVPlayout 15.8 PRO · VLC</title>
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TVPlayout VLC PRO · Playout por VLC</title>
 <link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/scheduler_pro.css"></head><body>
-<header><div class="brand"><div class="brandIcon">▶</div><div><h1>TVPlayout 15.8 <span class="proBadge">PRO</span></h1><span>24 HORAS · SUBTÍTULOS · RED · AUTOMATIZACIÓN</span></div></div><div class="status {{'ok' if obs.connected else 'bad'}}">OBS · {{'CONECTADO' if obs.connected else 'DESCONECTADO'}}</div></header>
-<nav><a class="{{'a' if tab=='playout' else ''}}" href="/?tab=playout">▶ PLAYOUT</a><a class="{{'a' if tab=='scheduler' else ''}}" href="/?tab=scheduler">📅 SCHEDULER</a><a class="{{'a' if tab=='library' else ''}}" href="/?tab=library">🎬 MEDIA POOL</a><a class="{{'a' if tab=='scanner' else ''}}" href="/?tab=scanner">📡 SCANNER</a><a class="{{'a' if tab=='tmdb' else ''}}" href="/?tab=tmdb">🎞️ TMDB</a><a class="{{'a' if tab=='subs' else ''}}" href="/?tab=subs">💬 SUBTÍTULOS</a><a class="{{'a' if tab=='logo' else ''}}" href="/?tab=logo">🏷️ LOGO</a><a class="{{'a' if tab=='ads' else ''}}" href="/?tab=ads">📢 AUTO ANUNCIOS</a><a class="{{'a' if tab=='settings' else ''}}" href="/?tab=settings">⚙️ SALIDA OBS</a></nav>
+<header><div class="brand"><div class="brandIcon">▶</div><div><h1>TVPlayout <span class="proBadge">VLC PRO</span></h1><span>24 HORAS · VLC · TANDAS · SIN OBS</span></div></div><div class="status {{'ok' if vstatus.available or state.vlc_ready else 'bad'}}">VLC · {{'LISTO' if vstatus.available or state.vlc_ready else 'NO DISPONIBLE'}}</div></header>
+<nav><a class="{{'a' if tab=='playout' else ''}}" href="/?tab=playout">▶ PLAYOUT</a><a class="{{'a' if tab=='scheduler' else ''}}" href="/?tab=scheduler">📅 SCHEDULER</a><a class="{{'a' if tab=='library' else ''}}" href="/?tab=library">🎬 MEDIA POOL</a><a class="{{'a' if tab=='scanner' else ''}}" href="/?tab=scanner">📡 SCANNER</a><a class="{{'a' if tab=='tmdb' else ''}}" href="/?tab=tmdb">🎞️ TMDB</a><a class="{{'a' if tab=='subs' else ''}}" href="/?tab=subs">💬 SUBTÍTULOS</a><a class="{{'a' if tab=='ads' else ''}}" href="/?tab=ads">📢 TANDAS</a><a class="{{'a' if tab=='settings' else ''}}" href="/?tab=settings">⚙️ AJUSTES VLC</a></nav>
 <main><div id="liveNotice" class="notice" style="display:none">🔄 Cambio de audio/subtítulos aplicado al aire.</div>
-{% if tab=='scanner' %}<section class="card"><h2>📡 Scanner de biblioteca</h2><p>El escaneo corre en segundo plano: no bloquea el playout ni OBS.</p>{% for f in folders %}<div class="row"><div><b>{{f.name}}</b><small>{{f.path}} · {{'RECUSIVO' if f.recursive else 'SOLO CARPETA'}}</small></div><form method="post" action="/scan/{{f.id}}"><button>🔄 Escanear</button></form></div>{% endfor %}<div id="scanStatus" class="stats"><b>Estado:</b> {{'ESCANEANDO' if state.scanner.running else 'LISTO'}} · <b>Encontrados:</b> {{state.scanner.found}} · <b>Analizados:</b> {{state.scanner.analyzed}} · <b>Pendientes:</b> {{state.scanner.pending}}</div>
+{% if tab=='scanner' %}<section class="card"><h2>📡 Scanner de biblioteca</h2><p>El escaneo corre en segundo plano: no bloquea el playout.</p>{% for f in folders %}<div class="row"><div><b>{{f.name}}</b><small>{{f.path}} · {{'RECUSIVO' if f.recursive else 'SOLO CARPETA'}}</small></div><form method="post" action="/scan/{{f.id}}"><button>🔄 Escanear</button></form></div>{% endfor %}<div id="scanStatus" class="stats"><b>Estado:</b> {{'ESCANEANDO' if state.scanner.running else 'LISTO'}} · <b>Encontrados:</b> {{state.scanner.found}} · <b>Analizados:</b> {{state.scanner.analyzed}} · <b>Pendientes:</b> {{state.scanner.pending}}</div>
 {% if state.scanner.found %}<progress id="scanProgress" value="{{state.scanner.analyzed}}" max="{{state.scanner.found}}"></progress>{% endif %}{% if state.scanner.errors %}<div class="error">{% for e in state.scanner.errors[:20] %}<div>{{e}}</div>{% endfor %}</div>{% endif %}</section>
 {% elif tab=='library' %}<section class="card"><h2>📁 Carpetas</h2><form method="post" action="/folder/add" class="form"><input name="path" placeholder="C:\Peliculas o \\SERVIDOR\Videos" required><input name="name" placeholder="Nombre"><select name="category"><option>Movie</option><option>Series</option><option>Commercial</option><option>Promo</option><option>Ident</option></select><label><input type="checkbox" name="recursive" value="1" checked> Subcarpetas</label><button>＋ Agregar y escanear</button></form></section>
 <section class="card"><h2>🎬 Media Pool / Editor</h2>
@@ -37,12 +37,8 @@
 {% if tmdb.last_error %}<div class="error">{{tmdb.last_error}}</div>{% endif %}
 </section>
 <section class="card">
-<h2>🖼️ Titulador OBS nativo</h2>
-<p>Usa <b>Text (GDI+)</b> e <b>Image Source</b>. No depende de Browser Source. TMDB proporciona las imágenes y TVPlayout las guarda localmente.</p>
-<div class="info">
-<b>Fuentes recomendadas:</b> MOVIE_TITLE · MOVIE_POSTER · MOVIE_LOGO.<br>
-El año se conserva para identificar la película, pero <b>nunca se muestra</b>.
-</div>
+<h2>🖼️ Títulos e imágenes locales</h2>
+<p>TMDB guarda el título oficial y el poster localmente. El panel en VLC no necesita Browser Source ni fuentes de OBS.</p>
 </section>
 <script>
 async function pollTMDB(){
@@ -56,11 +52,11 @@ async function pollTMDB(){
 setInterval(pollTMDB,5000);
 pollTMDB();
 </script>
-{% elif tab=='subs' %}<section class="card"><h2>💬 Subtítulos</h2><p>V9 detecta subtítulos internos del MKV y archivos externos SRT/ASS/SSA/VTT junto a la película.</p><pre>Película.mkv
+{% elif tab=='subs' %}<section class="card"><h2>💬 Subtítulos</h2><p>VLC detecta subtítulos internos del MKV y archivos externos SRT/ASS/SSA/VTT junto a la película. TVPlayout convierte los SRT externos a UTF-8 para VLC.</p><pre>Película.mkv
 Película.srt
 Película.es.srt
 Película.en.srt
-Película.forced.es.srt</pre><div class="info">Los SRT externos se asocian por nombre de archivo. Al seleccionar uno, V9 crea un archivo temporal para reproducirlo sin modificar el original.</div></section>
+Película.forced.es.srt</pre><div class="info">Al seleccionar un subtítulo externo, VLC lo adjunta al reproducir la película (autodetección o slave). El archivo original nunca se modifica.</div></section>
 {% elif tab=='scheduler' %}<section class="card schedulerHero"><div class="sectionHead"><div><span class="eyebrow">PROGRAMACIÓN 24/7</span><h2>📅 Scheduler 12.9</h2><p>Generación por bloques de 7 días para proteger el playout.</p></div><div class="schedulerActions"><form method="post" action="/schedule/delete-week" onsubmit="return confirm('¿Eliminar toda la semana seleccionada? No se borrarán películas del Media Pool.')"><input type="hidden" name="start_date" id="clearWeekDate" value="{{today}}"><button class="danger">🧹 LIMPIAR SEMANA</button></form><form method="post" action="/schedule/clear-month" onsubmit="return confirm('¿Eliminar TODA la programación del mes? Las películas permanecerán en Media Pool.')"><input type="hidden" name="month" value="{{month}}"><button class="danger">🧹 LIMPIAR MES</button></form></div></div>
 <p>El mes se genera en bloques independientes de 7 días. Esto evita una operación enorme y permite revisar cada semana.</p>
 <form method="post" action="/generate-month" class="form">
@@ -108,110 +104,84 @@ Película.forced.es.srt</pre><div class="info">Los SRT externos se asocian por n
 <label>Audio<input type="number" name="audio_index" min="0" value="0"></label>
 <label>Subtítulo<input type="number" name="subtitle_index" min="-1" value="-1"></label>
 <button>＋ INSERTAR ANUNCIO</button></form></section>
-{% elif tab=='logo' %}
-<section class="card"><h2>🏷️ Configuración de Logo de Tanda</h2>
-<p>Selecciona exactamente la escena y fuente de OBS donde está el logo. Durante COMMERCIAL se activa esa fuente.</p>
-<form method="post" action="/config/logo-v10" class="form">
-<label>Escena del logo<select name="scene" id="logoScene"><option value="">-- Seleccionar escena --</option>
-{% for sc in obs.scenes %}<option value="{{sc.scene}}" {% if sc.scene==cfg.logo.scene %}selected{% endif %}>{{sc.scene}}</option>{% endfor %}</select></label>
-<label>Fuente del logo<select name="source" id="logoSource"><option value="">-- Seleccionar fuente --</option>
-{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" {% if x==cfg.logo.source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}</select></label>
-<label><input type="checkbox" name="enabled" value="1" {% if cfg.logo.enabled %}checked{% endif %}> Activar logo</label>
-<label><input type="checkbox" name="show_during_ads" value="1" {% if cfg.logo.show_during_ads %}checked{% endif %}> Mostrar durante anuncios</label>
-<div class="twobtn"><button type="button" onclick="refreshOBSScenes()">🔄 ACTUALIZAR ESCENAS</button><button>💾 GUARDAR LOGO</button></div></form>
-</section>
-{% elif tab=='ads' %}<section class="card"><h2>📢 Auto anuncios aleatorios</h2><form method="post" action="/config/ads" class="form"><label><input type="checkbox" name="enabled" value="1" {% if cfg.auto_ads.enabled %}checked{% endif %}> Activar</label><label>Intervalo<input type="number" name="interval_minutes" value="{{cfg.auto_ads.interval_minutes}}"></label><label>Objetivo tanda (seg)<input type="number" name="break_seconds" value="{{cfg.auto_ads.break_seconds}}"></label><label>Mínimo<input type="number" name="min_ads" value="{{cfg.auto_ads.min_ads}}"></label><label>Máximo<input type="number" name="max_ads" value="{{cfg.auto_ads.max_ads}}"></label><label>Categoría<select name="category"><option>Commercial</option><option>Promo</option></select></label><label><input type="checkbox" name="avoid_repeat" value="1" {% if cfg.auto_ads.avoid_repeat %}checked{% endif %}> No repetir</label><button>Guardar</button></form></section>
-{% elif tab=='settings' %}
-<section class="card"><h2>⚙️ Salida de Playout / OBS</h2>
-<p>Esta sección controla exactamente qué escena y qué fuente recibe las películas del playout.</p>
-<form method="post" action="/config/channel" class="form">
-<label>Nombre del canal<input name="name" value="{{cfg.channel.name}}"></label>
-<label>Escena de Playout<select name="scene" id="outScene">
-<option value="">-- Seleccionar escena --</option>
-{% for sc in obs.scenes %}<option value="{{sc.scene}}" {% if sc.scene==cfg.channel.scene %}selected{% endif %}>{{sc.scene}}</option>{% endfor %}
-</select></label>
-<label>Fuente de Playout<select name="source" id="outSource">
-<option value="">-- Seleccionar fuente --</option>
-{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" data-scene="{{sc.scene}}" {% if x==cfg.channel.source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}
-</select></label>
-<div class="twobtn"><button type="button" onclick="refreshOBSScenes()">🔄 ACTUALIZAR ESCENAS</button><button>💾 GUARDAR SALIDA</button></div>
-</form>
-<div class="info"><b>Recomendado:</b> crea en OBS una escena como <b>MOVIES HD</b> y dentro una fuente <b>PLAYOUT</b> de tipo <b>VLC Video Source</b>. Selecciona ambos aquí.</div>
-</section>
-<section class="card"><h2>📝 Título / Lower automático</h2>
-<p>Modo recomendado: <b>VLC Video Source</b>. TVPlayout controla el reproductor VLC interno de OBS mediante OBS WebSocket.</p>
-<form method="post" action="/config/title-overlay" class="form" id="titleOverlayForm">
-<label>Escena<select name="scene" id="titleScene"><option value="">-- Seleccionar escena --</option>{% for sc in obs.scenes %}<option value="{{sc.scene}}" {% if sc.scene==cfg.title_overlay.scene %}selected{% endif %}>{{sc.scene}}</option>{% endfor %}</select></label>
-<label>Fuente título (Text GDI+)<select name="source" id="titleSource"><option value="">-- Seleccionar fuente --</option>{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" data-scene="{{sc.scene}}" {% if x==cfg.title_overlay.source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}</select></label>
-<label>Fuente poster (Image Source)<select name="poster_source"><option value="">-- Ninguna --</option>{% for sc in obs.scenes %}{% for x in sc.sources %}<option value="{{x}}" {% if x==cfg.title_overlay.poster_source %}selected{% endif %}>{{sc.scene}} → {{x}}</option>{% endfor %}{% endfor %}</select></label>
-<label>Modo<select name="mode"><option value="gdi" {% if cfg.title_overlay.mode=='gdi' %}selected{% endif %}>NATIVO OBS / GDI+</option><option value="browser" {% if cfg.title_overlay.mode=='browser' %}selected{% endif %}>Browser Source (legacy)</option></select></label>
-<label>Plantilla<select name="template"><option value="1" {% if cfg.title_overlay.template==1 %}selected{% endif %}>1 · Barra lateral</option><option value="2" {% if cfg.title_overlay.template==2 %}selected{% endif %}>2 · Línea inferior</option><option value="3" {% if cfg.title_overlay.template==3 %}selected{% endif %}>3 · Línea superior</option><option value="4" {% if cfg.title_overlay.template==4 %}selected{% endif %}>4 · Degradado</option><option value="5" {% if cfg.title_overlay.template==5 %}selected{% endif %}>5 · Sólido</option></select></label>
-<label>Color título<input type="color" name="color1" value="{{cfg.title_overlay.color1}}"></label>
-<label>Color acento<input type="color" name="color2" value="{{cfg.title_overlay.color2}}"></label>
-<label><input type="checkbox" name="enabled" value="1" {% if cfg.title_overlay.enabled %}checked{% endif %}> Activar overlay</label>
-<label>Mostrar cada (minutos)<input type="number" name="interval_minutes" min="0" value="{{cfg.title_overlay.interval_minutes}}"><small>0 = permanente</small></label>
-<div class="grid2">
-<label>Ancho poster (px)<input type="number" name="poster_width" min="1" value="{{cfg.title_overlay.poster_width}}"></label>
-<label>Alto poster (px)<input type="number" name="poster_height" min="1" value="{{cfg.title_overlay.poster_height}}"></label>
-<label>Posición X<input type="number" name="poster_x" value="{{cfg.title_overlay.poster_x}}"></label>
-<label>Posición Y<input type="number" name="poster_y" value="{{cfg.title_overlay.poster_y}}"></label>
+{% elif tab=='ads' %}<section class="card"><h2>📢 Tandas comerciales automáticas</h2>
+<p>El motor inserta eventos COMMERCIAL dentro de las películas (AUTO_ADS). VLC corta la película, reproduce la tanda y la reanuda en el punto exacto.</p>
+<form method="post" action="/config/ads" class="form">
+<label><input type="checkbox" name="enabled" value="1" {% if cfg.auto_ads.enabled %}checked{% endif %}> Activar auto tandas</label>
+<label>Intervalo (min)<input type="number" name="interval_minutes" value="{{cfg.auto_ads.interval_minutes}}"></label>
+<label>Objetivo tanda (seg)<input type="number" name="break_seconds" value="{{cfg.auto_ads.break_seconds}}"></label>
+<label>Mínimo<input type="number" name="min_ads" value="{{cfg.auto_ads.min_ads}}"></label>
+<label>Máximo<input type="number" name="max_ads" value="{{cfg.auto_ads.max_ads}}"></label>
+<label>Categoría<select name="category"><option>Commercial</option><option>Promo</option></select></label>
+<label><input type="checkbox" name="avoid_repeat" value="1" {% if cfg.auto_ads.avoid_repeat %}checked{% endif %}> No repetir</label>
+<button>💾 Guardar</button></form>
+<div class="info">Con <b>Activar</b> marcado, el motor refresca solo las tandas de las próximas horas. Los comerciales deben estar en el Media Pool con categoría <b>Commercial</b> o <b>Promo</b>.</div>
+<div class="twobtn" style="margin-top:12px">
+<button type="button" onclick="tvpAdsCutNow()">✂️ CORTAR A TANDA AHORA</button>
+<button type="button" onclick="tvpAdsSkip()">⏭ SALTAR TANDA ACTUAL</button>
 </div>
-<label><input type="checkbox" name="poster_keep_ratio" value="1" {% if cfg.title_overlay.poster_keep_ratio %}checked{% endif %}> Mantener proporción del poster</label>
-<label><input type="checkbox" name="poster_crop" value="1" {% if cfg.title_overlay.poster_crop %}checked{% endif %}> Recortar al tamaño configurado</label>
-<label>Duración en pantalla (segundos)<input type="number" name="show_seconds" min="1" value="{{cfg.title_overlay.show_seconds}}"></label>
-<label>Máximo de caracteres por línea<input type="number" name="wrap_chars" min="8" max="60" value="{{cfg.title_overlay.wrap_chars}}"></label>
-<label><input type="checkbox" name="show_during_ads" value="1" {% if cfg.title_overlay.show_during_ads %}checked{% endif %}> Mostrar durante comerciales</label>
-<div class="twobtn"><button type="button" onclick="refreshOBSScenes()">🔄 ACTUALIZAR ESCENAS</button><button>💾 GUARDAR LOWER</button></div></form>
-<div class="info"><b>OBS:</b> crea Text (GDI+) <code>MOVIE_TITLE</code> y opcionalmente Image Source <code>MOVIE_POSTER</code>. TVPlayout los actualiza directamente. <br><b>Ejemplo:</b> <code>Atrapando a un Monstruo</code> → <b>Atrapando a un</b> / <b>Monstruo</b>.</div>
-</section>
-<section class="card"><h2>🎞️ TMDB / títulos e imágenes</h2><p>La identificación y las imágenes se gestionan desde el menú <b>TMDB</b>. El título oficial se usa para el titulador y el año no se muestra.</p><div class="info">El único recurso gráfico descargado de TMDB es el poster de la película.</div></section>
-
-<section class="card" id="tvpVlcControls">
-<h2>🎬 VLC · CONTROL DE PLAYOUT</h2>
-<div class="info">OBS usa directamente <b>VLC Video Source</b>. El <b>Scheduler</b> es quien manda la lista y el cambio de película.</div>
-<div class="twobtn">
-<button type="button" onclick="tvpVlc('play')">▶ PLAY</button>
-<button type="button" onclick="tvpVlc('pause')">⏸ PAUSA</button>
-<button type="button" onclick="tvpVlc('previous')">⏮ ANTERIOR</button>
-<button type="button" onclick="tvpVlc('next')">⏭ SIGUIENTE</button>
-<button type="button" onclick="tvpVlc('restart')">↻ REINICIAR</button>
-</div>
-<div id="tvpVlcMsg" class="info">Fuente VLC: {{cfg.vlc.source if cfg.vlc is defined else 'PLAYOUT VLC'}}</div>
+<div id="adsMsg" class="info">—</div>
 </section>
 <script>
-async function tvpVlc(action){
- const m=document.getElementById('tvpVlcMsg');
- try{
-   const r=await fetch('/api/vlc/action',{method:'POST',body:new URLSearchParams({action})});
-   const d=await r.json();
-   if(!d.ok) throw new Error(d.error||'Error VLC');
-   m.textContent='VLC/SCHEDULER: '+action.toUpperCase()+' OK';
-   if(action==='next'||action==='previous') setTimeout(()=>location.reload(),350);
- }catch(e){m.textContent='VLC ERROR: '+e.message;}
-}
+async function tvpAdsCutNow(){const m=document.getElementById('adsMsg');m.textContent='Insertando tanda inmediata...';try{const r=await fetch('/api/ads/cut-now',{method:'POST'}),d=await r.json();if(!d.ok)throw Error(d.error||'No se pudo cortar');m.textContent='✓ Tanda de '+d.ads+' anuncios ('+d.seconds+'s) programada. VLC cortará en segundos.';}catch(e){m.textContent='✕ '+e.message}}
+async function tvpAdsSkip(){const m=document.getElementById('adsMsg');m.textContent='Saltando tanda...';try{const r=await fetch('/api/ads/skip',{method:'POST'}),d=await r.json();if(!d.ok)throw Error(d.error||'No hay tanda');m.textContent='✓ Tanda saltada. Vuelve la película: '+(d.title||'');}catch(e){m.textContent='✕ '+e.message}}
 </script>
-<section class="card"><h2>🔌 Estado OBS</h2><p>Conexión: <b>{{'CONECTADO' if obs.connected else 'DESCONECTADO'}}</b></p>{% if not obs.connected %}<div class="error">{{obs.error}}</div>{% endif %}</section>
+{% elif tab=='settings' %}
+<section class="card"><h2>⚙️ Reproductor VLC (sin OBS)</h2>
+<p>TVPlayout abre una instancia de <b>VLC</b> (libvlc) en esta máquina y la usa como salida de canal. Cada evento del Scheduler se carga en VLC directamente desde su archivo original.</p>
+<div class="stats" id="vlcInfoBox">
+<b>python-vlc:</b> {{'OK' if vstatus.vlc_info.module_available else 'NO INSTALADO'}} ·
+<b>libvlc:</b> <span id="vlcLibDir">{{vstatus.vlc_info.lib_dir or 'auto'}}</span> ·
+<b>estado:</b> <span id="cfgVlcState">{{vstatus.state or 'idle'}}</span>
+</div>
+{% if vstatus.error and not vstatus.available %}<div class="error">VLC: {{vstatus.error}}</div>{% endif %}
+<form method="post" action="/config/vlc" class="form" style="margin-top:12px">
+<label>Nombre del canal (guardar)<input name="channel_name" placeholder="{{cfg.channel.name}}" value="{{cfg.channel.name}}"></label>
+<label>Pantalla completa<input type="checkbox" name="fullscreen" value="1" {% if cfg.vlc.fullscreen %}checked{% endif %}></label>
+<label>Volumen maestro (0-200)<input type="number" name="volume" min="0" max="200" value="{{cfg.vlc.volume}}"></label>
+<label>Cache de red (ms)<input type="number" name="network_caching" min="50" step="10" value="{{cfg.vlc.network_caching}}"></label>
+<label>Carpeta libvlc (opcional)<input name="lib_dir" placeholder="C:\Program Files\VideoLAN\VLC" value="{{cfg.vlc.lib_dir}}"></label>
+<label>Idioma audio (auto)<input name="audio_language" value="{{cfg.vlc.audio_language}}"></label>
+<label>Idioma subs (auto)<input name="sub_language" value="{{cfg.vlc.sub_language}}"></label>
+<button>💾 GUARDAR AJUSTES VLC</button>
+</form>
+<p style="margin-top:8px">La carpeta de libvlc normalmente se detecta sola cuando VLC está instalado. Solo indícala si TVPlayout no encuentra VLC.</p>
+</section>
+<section class="card"><h2>🔌 Control del reproductor</h2>
+<div class="twobtn">
+<button type="button" onclick="tvpVlcBoot()">🚀 INICIAR VLC</button>
+<button type="button" onclick="tvpVlcStopNow()">⏹ DETENER REPRODUCCIÓN</button>
+<button type="button" onclick="tvpVlcInfo()">🔎 REVISAR VLC</button>
+</div>
+<div id="vlcCfgMsg" class="info">Estado VLC: {{'disponible' if vstatus.available else 'no disponible'}}</div>
+</section>
+<script>
+async function tvpVlcBoot(){const m=document.getElementById('vlcCfgMsg');m.textContent='Arrancando VLC...';try{const r=await fetch('/api/vlc/start',{method:'POST'}),d=await r.json();if(!d.ok)throw Error(d.error||'No se pudo iniciar VLC');m.textContent='✓ VLC iniciado. Cargando el evento al aire si existe.';setTimeout(()=>location.reload(),400);}catch(e){m.textContent='✕ '+e.message}}
+async function tvpVlcStopNow(){const m=document.getElementById('vlcCfgMsg');try{const r=await fetch('/api/vlc/stop',{method:'POST'}),d=await r.json();if(!d.ok)throw Error(d.error||'Error');m.textContent='⏹ Reproducción detenida.';}catch(e){m.textContent='✕ '+e.message}}
+async function tvpVlcInfo(){const m=document.getElementById('vlcCfgMsg');try{const r=await fetch('/api/vlc/info',{cache:'no-store'}),d=await r.json();m.textContent='libvlc: '+(d.lib_dir||'auto-detect')+' · módulo: '+(d.module_available?'OK':'NO')+(d.error?(' · '+d.error):'');}catch(e){m.textContent='✕ '+e.message}}
+</script>
 {% else %}
 <section class="controlRoom">
   <div class="airHero card">
-    <div class="airTop"><div><span class="eyebrow">● ON AIR · CONTROL ROOM</span><h2 id="airTitle">{{current_event.title if current_event else (state.current.title if state.current else 'SIN CONTENIDO')}}</h2><div class="airMeta" id="airMeta">{% if current_event %}{{current_event.start_at[0:10]}} · {{current_event.start_at[11:19]}} → {{current_event.end_at[11:19]}}{% else %}Esperando programación{% endif %}</div></div><span class="live-badge">● EN VIVO</span></div>
+    <div class="airTop"><div><span class="eyebrow">● ON AIR · CONTROL ROOM</span><h2 id="airTitle">{{state.current.title if state.current else (current_event.title if current_event else 'SIN CONTENIDO')}}</h2><div class="airMeta" id="airMeta">{% if current_event %}{{current_event.start_at[0:10]}} · {{current_event.start_at[11:19]}} → {{current_event.end_at[11:19]}}{% elif state.current and state.current.start_at %}{{state.current.start_at[0:10]}} · {{state.current.start_at[11:19]}} → {{state.current.end_at[11:19]}}{% else %}Esperando programación{% endif %}</div></div><span class="live-badge">● EN VIVO · VLC</span></div>
     <div class="progressTrack"><div id="airProgress" class="progressFill" style="width:0%"></div></div>
     <div class="airClock"><b id="airPosition">00:00:00</b><span>/</span><span id="airDuration">00:00:00</span><b id="airRemaining">—</b></div>
     <div class="liveControls">
       <label>Audio<select id="liveAudioSelect"></select></label><label>Subtítulo<select id="liveSubSelect"></select></label>
-<div class="card" id="vlcControlRoom" style="margin-top:12px">
+<div class="card" id="vlcControlRoom" style="margin-top:12px;grid-column:1/-1">
   <div class="sectionHead">
-    <div><span class="eyebrow">🎬 VLC ENGINE · OBS</span>
+    <div><span class="eyebrow">🎬 VLC ENGINE · REPRODUCTOR</span>
       <h2>CONTROL DIRECTO DEL PLAYOUT</h2>
-      <p>El Scheduler decide la lista. TVPlayout controla la fuente VLC de OBS.</p>
+      <p>El Scheduler decide la lista. VLC reproduce. Las tandas se intercalan solas.</p>
     </div>
-    <span id="vlcReadyBadge" class="status bad">VLC · NO PREPARADO</span>
+    <span id="vlcReadyBadge" class="status {{'ok' if state.vlc_ready else 'bad'}}">VLC · {{'REPRODUCIENDO' if state.vlc_ready else 'NO PREPARADO'}}</span>
   </div>
-  <div class="stats">
-    <b>Escena:</b> <span id="vlcScene">{{cfg.channel.scene}}</span>
-    · <b>Fuente:</b> <span id="vlcSource">{{cfg.vlc.source if cfg.vlc is defined else 'PLAYOUT VLC'}}</span>
+  <div class="stats" style="margin-top:8px">
+    <b>Reproductor:</b> <span id="vlcSource">VLC</span>
+    · <b>Estado:</b> <span id="vlcState">{{state.vlc_state or 'idle'}}</span>
+    · <b>Archivo:</b> <span id="vlcUri" style="word-break:break-all">{{state.current and state.current.path or ''}}</span>
   </div>
-  <div class="twobtn">
+  <div class="twobtn" style="margin-top:12px">
     <button type="button" onclick="tvpVlcAction('play')">▶ PLAY</button>
     <button type="button" onclick="tvpVlcAction('pause')">⏸ PAUSA</button>
     <button type="button" onclick="tvpVlcAction('previous')">⏮ ANTERIOR</button>
@@ -220,17 +190,19 @@ async function tvpVlc(action){
     <button type="button" onclick="tvpVlcLoadCurrent()">🎬 CARGAR ACTUAL</button>
     <button type="button" onclick="tvpVlcSyncPlayout()">⏱ SINCRONIZAR AL PLAYOUT</button>
     <button type="button" onclick="tvpVlcSyncStatus()">🔎 VERIFICAR SYNC</button>
-    <button type="button" onclick="tvpVlcSetup()">🔧 PREPARAR VLC EN OBS</button>
+    <button type="button" onclick="tvpVlcSetup()">🔧 PREPARAR VLC</button>
+    <button type="button" class="danger" onclick="tvpAdsCutNow()">✂️ TANDA AHORA</button>
+    <button type="button" onclick="tvpAdsSkip()">⏭ SALTAR TANDA</button>
   </div>
   <div id="vlcMsg" class="info">Inicializando VLC…</div>
 </div>
 
-      <button id="liveChangeBtn" type="button">💾 CAMBIAR EN VIVO</button><button type="button" onclick="refreshOBS()">🔄 OBS</button>
+      <button id="liveChangeBtn" type="button">💾 CAMBIAR EN VIVO</button><button type="button" onclick="refreshVlcState(true)">🔄 VLC</button>
     </div><div id="liveEditMsg" class="info" style="display:none"></div>
   </div>
   <aside class="airSide">
-    <section class="card nextHero"><div class="eyebrow">⏭ NEXT · SIGUIENTE</div><h2 id="nextTitle">{{state.next.title if state.next else 'Sin siguiente'}}</h2><div id="nextTime">{{state.next.start_at[11:19] if state.next else '—'}}</div><div id="nextDuration">{{'%.1f'|format(state.next.duration/60) if state.next else '0'}} min</div><button type="button" onclick="openNextEditor()">✏️ EDITAR NEXT</button></section>
-    <section class="card obsMini"><h3>📡 OBS</h3><div>Escena: <b>{{cfg.channel.scene or 'No configurada'}}</b></div><div>Fuente: <b>{{cfg.channel.source or 'No configurada'}}</b></div></section>
+    <section class="card nextHero"><div class="eyebrow">⏭ NEXT · SIGUIENTE</div><h2 id="nextTitle">{{state.next.title if state.next else 'Sin siguiente'}}</h2><div id="nextTime">{{state.next.start_at[11:19] if state.next else '—'}}</div><div id="nextDuration">{{'%.1f'|format(state.next.duration/60) if state.next else '0'}} min</div><button type="button" onclick="window.openNextEditor ? openNextEditor() : (location.href='/?tab=scheduler')">✏️ EDITAR NEXT</button></section>
+    <section class="card vlcMini"><h3>🎬 VLC PLAYER</h3><div>Reproductor: <b>VLC (libvlc)</b></div><div>Estado: <b id="miniVlcState">{{state.vlc_state or 'idle'}}</b></div>{% if state.ad_break %}<div>Tanda: <b style="color:#f0a43b">EN CURSO</b></div>{% endif %}</section>
   </aside>
 </section>
 <section class="card upcomingCard"><div class="sectionHead"><div><span class="eyebrow">CONTINUIDAD</span><h2>📋 PRÓXIMOS 5 EVENTOS</h2></div><span id="coverageBadge" class="status ok">24H · CONTINUIDAD</span></div><div id="upcomingList" class="upcomingList"></div></section>
@@ -241,7 +213,7 @@ async function tvpVlc(action){
 window.TV_TAB={{tab|tojson}};
 let libraryPage=1, libraryQ="";
 
-function escapeHtml(x){return String(x??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');}
+function escapeHtml(x){return String(x??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\"/g,'&quot;').replace(/'/g,'&#39;');}
 function escapeAttr(x){return escapeHtml(x).replace(/`/g,'&#96;');}
 
 async function loadLibrary(page=1){
@@ -309,15 +281,12 @@ function scheduleMedia(id){document.getElementById('manualMid').value=id;documen
 function openMediaEditor(m){const modal=document.getElementById('mediaModal');if(!modal)return;document.getElementById('mmId').value=m.id;document.getElementById('mmTitle').value=m.title;document.getElementById('mmAudio').innerHTML=trackOptions(m.audio_json,0,'audio');document.getElementById('mmSub').innerHTML=trackOptions(m.subs_json,-1,'sub');modal.style.display='flex'}
 function closeMediaEditor(){document.getElementById('mediaModal').style.display='none'}
 async function saveMediaEditor(){const id=+document.getElementById('mmId').value;const fd=new URLSearchParams({mid:id,title:document.getElementById('mmTitle').value,category:'Movie',audio_default:document.getElementById('mmAudio').value,subtitle_default:document.getElementById('mmSub').value});await fetch('/media/update',{method:'POST',body:fd});closeMediaEditor();if(window.TV_TAB==='playout')loadPlayoutMedia(1);else loadLibrary(1)}
-function setupLiveEditor(){const f=document.getElementById('liveEditForm');if(!f)return;f.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(f);const payload={sid:+fd.get('sid'),start_at:fd.get('start_at'),audio_index:+fd.get('audio_index'),subtitle_index:+fd.get('subtitle_index'),kind:fd.get('kind')};const msg=document.getElementById('liveEditMsg');msg.textContent='Preparando pista...';try{const r=await fetch('/api/schedule/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!d.ok)throw Error(d.error||'Error');msg.textContent=d.live?'✓ Audio/SRT actualizado en vivo.':'✓ Guardado sin tocar OBS.';}catch(e){msg.textContent='✕ '+e.message}})}
-setupLiveEditor();
 async function refreshLiveControls(c){
  const a=document.getElementById('liveAudioSelect'),s=document.getElementById('liveSubSelect'); if(!a||!s)return;
  const aud=JSON.parse(c.audio_json||'[]'),subs=JSON.parse(c.subs_json||'[]');
- const oldA=a.value,oldS=s.value;
  a.innerHTML=aud.map(x=>`<option value="${x.ordinal}">${escapeHtml((x.language||'und').toUpperCase())}${x.title?' — '+escapeHtml(x.title):''}</option>`).join('')||'<option value="0">DEFAULT</option>';
  s.innerHTML='<option value="-1">Ninguno</option>'+subs.map(x=>`<option value="${x.ordinal}">${escapeHtml((x.language||'und').toUpperCase())}${x.title?' — '+escapeHtml(x.title):''}${x.external?' (SRT)':''}</option>`).join('');
- if([...a.options].some(x=>x.value==String(c.audio_index)))a.value=String(c.audio_index); else if(oldA)a.value=oldA;
+ if([...a.options].some(x=>x.value==String(c.audio_index)))a.value=String(c.audio_index);
  if([...s.options].some(x=>x.value==String(c.subtitle_index)))s.value=String(c.subtitle_index); else s.value='-1';
  const btn=document.getElementById('liveChangeBtn'); if(btn&&!btn.dataset.bound){btn.dataset.bound='1';btn.onclick=async()=>{const msg=document.getElementById('liveEditMsg');msg.style.display='block';msg.textContent='Preparando cambio de pista...';btn.disabled=true;try{const r=await fetch('/api/schedule/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:c.id,start_at:c.start_at.slice(0,16),audio_index:+a.value,subtitle_index:+s.value,kind:c.kind})});const d=await r.json();if(!d.ok)throw Error(d.error||'No se pudo cambiar');msg.textContent=d.live?'✓ Audio/subtítulo cambiado en vivo.':'✓ Guardado.';}catch(e){msg.textContent='✕ '+e.message}finally{btn.disabled=false}}}
 }
@@ -326,16 +295,15 @@ function openNextEditor(){const n=window.__nextEvent;if(n)location.href='/?tab=s
 async function tvpVlcSetup(){
   const m=document.getElementById('vlcMsg');
   try{
-    m.textContent='Preparando VLC Video Source en OBS...';
+    m.textContent='Preparando el reproductor VLC...';
     const r=await fetch('/api/vlc/setup',{method:'POST'});
     const d=await r.json();
     if(!d.ok) throw new Error(d.error||'No se pudo preparar VLC');
     document.getElementById('vlcReadyBadge').textContent='VLC · LISTO';
     document.getElementById('vlcReadyBadge').className='status ok';
-    document.getElementById('vlcScene').textContent=d.scene;
-    document.getElementById('vlcSource').textContent=d.source;
-    m.textContent='✓ Salida VLC preparada: '+d.scene+' → '+d.source;
-    await refreshOBS();
+    document.getElementById('vlcSource').textContent='VLC';
+    m.textContent='✓ VLC listo. El Scheduler cargará el evento al aire.';
+    refreshVlcState(true);
   }catch(e){
     document.getElementById('vlcReadyBadge').textContent='VLC · ERROR';
     document.getElementById('vlcReadyBadge').className='status bad';
@@ -370,7 +338,7 @@ async function tvpVlcLoadCurrent(){
     const r=await fetch('/api/vlc/load-current',{method:'POST'});
     const d=await r.json();
     if(!d.ok) throw new Error(d.error||'No se pudo cargar');
-    m.textContent='✓ CARGADA EN OBS: '+d.title;
+    m.textContent='✓ CARGADA EN VLC: '+d.title;
     setTimeout(refreshVlcState,300);
   }catch(e){m.textContent='VLC ERROR: '+e.message;}
 }
@@ -381,22 +349,42 @@ async function tvpVlcAction(action){
     const d=await r.json();
     if(!d.ok) throw new Error(d.error||'Error VLC');
     m.textContent='✓ '+action.toUpperCase()+' ejecutado por TVPlayout';
-    if(action==='next'||action==='previous') setTimeout(()=>refreshPlayout(),300);
+    if(action==='next'||action==='previous'||action==='restart') setTimeout(()=>refreshPlayout(),300);
   }catch(e){m.textContent='VLC ERROR: '+e.message;}
 }
-async function refreshVlcState(){
+async function tvpAdsCutNow(){
+  const m=document.getElementById('vlcMsg');
+  try{
+    m.textContent='Insertando tanda comercial inmediata...';
+    const r=await fetch('/api/ads/cut-now',{method:'POST'}),d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No se pudo cortar');
+    m.textContent='✓ Tanda de '+d.ads+' anuncios programada. VLC corta en segundos.';
+    setTimeout(refreshPlayout,1000);
+  }catch(e){m.textContent='✕ '+e.message;}
+}
+async function tvpAdsSkip(){
+  const m=document.getElementById('vlcMsg');
+  try{
+    const r=await fetch('/api/ads/skip',{method:'POST'}),d=await r.json();
+    if(!d.ok) throw new Error(d.error||'No hay tanda');
+    m.textContent='✓ Tanda saltada. Vuelve: '+(d.title||'');
+    setTimeout(refreshPlayout,500);
+  }catch(e){m.textContent='✕ '+e.message;}
+}
+async function refreshVlcState(force){
   if(window.TV_TAB!=='playout') return;
   try{
     const r=await fetch('/api/vlc/status',{cache:'no-store'}),v=await r.json();
     const b=document.getElementById('vlcReadyBadge');
     if(!b)return;
-    b.textContent=v.ready?'VLC · LISTO':'VLC · NO PREPARADO';
+    b.textContent=v.ready?'VLC · REPRODUCIENDO':'VLC · NO PREPARADO';
     b.className='status '+(v.ready?'ok':'bad');
-    const sc=document.getElementById('vlcScene'),so=document.getElementById('vlcSource');
-    if(sc)sc.textContent=v.scene||'';
-    if(so)so.textContent=v.source||'';
+    const st=document.getElementById('vlcState'); if(st)st.textContent=v.state||'idle';
+    const so=document.getElementById('vlcSource'); if(so)so.textContent=v.source||'VLC';
+    const uri=document.getElementById('vlcUri'); if(uri)uri.textContent=v.uri||'';
+    const mini=document.getElementById('miniVlcState'); if(mini)mini.textContent=v.state||'idle';
     const m=document.getElementById('vlcMsg');
-    if(m && !v.ready) m.textContent='⚠ '+(v.error||'Configura una fuente VLC Video Source en la salida seleccionada.');
+    if(m && !v.ready && v.error) m.textContent='⚠ '+(v.error||'VLC sin reproducción.');
   }catch(e){}
 }
 async function refreshPlayout(){
@@ -410,11 +398,14 @@ async function refreshPlayout(){
   const nt=document.getElementById('nextTitle'),ntime=document.getElementById('nextTime'),nd=document.getElementById('nextDuration');
   if(nt)nt.textContent=n?.title||'Sin siguiente'; if(ntime)ntime.textContent=n?.start_at?.slice(11,19)||'—'; if(nd)nd.textContent=n?`${(n.duration/60).toFixed(1)} min`:'0 min';
   const list=document.getElementById('upcomingList'); if(list)list.innerHTML=(d.upcoming||[]).map((x,i)=>`<div class="upRow"><span class="upIndex">${String(i+1).padStart(2,'0')}</span><b>${escapeHtml(x.start_at.slice(11,19))}</b><span class="upTitle">${escapeHtml(x.title)}</span><span class="upDur">${(x.duration/60).toFixed(1)} min</span><span class="upKind">${escapeHtml(x.kind)}</span></div>`).join('')||'<div class="emptyState">No hay próximos eventos programados.</div>';
+  const badge=document.getElementById('coverageBadge');
+  if(badge){badge.textContent=d.ad_break?'📢 TANDA EN CURSO':'24H · CONTINUIDAD';badge.className='status '+(d.ad_break?'bad':'ok');}
   if(c){const now=new Date(d.now.replace(' ','T')),st=new Date(c.start_at.replace(' ','T')),en=new Date(c.end_at.replace(' ','T'));let pct=Math.max(0,Math.min(100,(now-st)/(en-st)*100));document.getElementById('airProgress').style.width=pct+'%';const sec=Math.max(0,(now-st)/1000),dur=Math.max(0,c.duration||0);document.getElementById('airPosition').textContent=fmtTime(sec);document.getElementById('airDuration').textContent=fmtTime(dur);document.getElementById('airRemaining').textContent='-'+fmtTime(Math.max(0,dur-sec));}
+  refreshVlcState();
  }catch(e){}
 }
 function fmtTime(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
-if(window.TV_TAB==='playout'){loadPlayoutMedia(1);refreshPlayout();refreshVlcState();setInterval(refreshPlayout,3000);setInterval(refreshVlcState,8000)}
+if(window.TV_TAB==='playout'){loadPlayoutMedia(1);refreshPlayout();refreshVlcState();setInterval(refreshPlayout,3000);setInterval(refreshVlcState,6000)}
 </script>
 <script>
 async function refreshScanner(){
@@ -428,32 +419,6 @@ async function refreshScanner(){
 }
 if(window.TV_TAB==="scanner"){refreshScanner();setInterval(refreshScanner,3000);}
 </script>
-
-<script>
-let __obsScenes=[];
-function rebuildSceneSelect(sceneId,sourceId,keepScene,keepSource){
- const se=document.getElementById(sceneId),so=document.getElementById(sourceId); if(!se)return;
- const scene=keepScene??se.value??''; const source=keepSource??so?.value??'';
- se.innerHTML='<option value="">-- Seleccionar escena --</option>'+__obsScenes.map(s=>`<option value="${escapeAttr(s.scene)}">${escapeHtml(s.scene)}</option>`).join(''); se.value=scene;
- if(!so)return; const sc=__obsScenes.find(x=>x.scene===scene);
- so.innerHTML='<option value="">-- Seleccionar fuente --</option>'+(sc?.sources||[]).map(x=>`<option value="${escapeAttr(x)}">${escapeHtml(x)}</option>`).join(''); so.value=source;
-}
-async function refreshOBSScenes(){
- try{const r=await fetch('/api/obs?refresh=1',{cache:'no-store'}),d=await r.json(); if(!d.connected)throw Error(d.error||'OBS desconectado'); __obsScenes=d.scenes||[];
-  for(const p of [['outScene','outSource'],['titleScene','titleSource'],['logoScene','logoSource']]){const se=document.getElementById(p[0]),so=document.getElementById(p[1]); if(se)rebuildSceneSelect(p[0],p[1],se.value,so?.value);}
- }catch(e){console.warn('OBS scenes:',e.message)}
-}
-if(['settings','logo'].includes(window.TV_TAB))refreshOBSScenes();
-</script>
-<script>
-async function refreshOBS(){
- try{
-  const r=await fetch('/api/obs?refresh=1',{cache:'no-store'}),d=await r.json();
-  alert(d.connected?'OBS CONECTADO':'OBS DESCONECTADO'+(d.error?': '+d.error:''));
-  location.reload();
- }catch(e){alert('No se pudo consultar OBS: '+e);}
-}
-</script>
 <script>
 async function refreshGeneration(){
  if(window.TV_TAB!=="scheduler")return;
@@ -465,9 +430,9 @@ async function refreshGeneration(){
   if(d.running){el.innerHTML='⏳ <b>Generando programación en segundo plano...</b> No cierres TVPlayout. La interfaz sigue disponible.';}
   else if(d.error){el.innerHTML='❌ <b>Error de generación:</b> '+escapeHtml(d.error);}
   else {
-    const r=d.result||{};
-    if(d.type==='week') el.innerHTML='✅ <b>Semana generada:</b> '+escapeHtml(r.start||d.start||'')+' → '+escapeHtml(r.end||'')+' · '+(r.events||0)+' eventos · '+(r.hours||0)+' h';
-    else el.innerHTML='✅ <b>Mes generado por semanas:</b> '+(r.events||0)+' eventos · '+(r.hours||0)+' h';
+    const r2=d.result||{};
+    if(d.type==='week') el.innerHTML='✅ <b>Semana generada:</b> '+escapeHtml(r2.start||d.start||'')+' → '+escapeHtml(r2.end||'')+' · '+(r2.events||0)+' eventos · '+(r2.hours||0)+' h';
+    else el.innerHTML='✅ <b>Mes generado por semanas:</b> '+(r2.events||0)+' eventos · '+(r2.hours||0)+' h';
   }
  }catch(e){}
 }
