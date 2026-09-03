@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import random
 import sqlite3
 import threading
@@ -29,6 +30,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+from urllib.parse import unquote
 
 from .vlc_player import BasePlayer, PlayerSnapshot
 
@@ -52,6 +54,24 @@ def _safe_json(value) -> List[dict]:
 
 def _now_stamp(now: datetime) -> str:
     return now.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _norm_path(value) -> str:
+    """Ruta local normalizada para comparar 'archivo en VLC' vs 'ruta del
+    Scheduler' sin falsos negativos (file://, %20, mayúsculas, / vs \)."""
+    v = str(value or "")
+    if v.lower().startswith("file://"):
+        v = v[7:]
+        try:
+            v = unquote(v)
+        except Exception:
+            pass
+        if len(v) > 2 and v[0] == "/" and v[2] == ":":
+            v = v[1:]  # file:///C:/... -> C:/...
+    try:
+        return os.path.normcase(os.path.normpath(os.path.abspath(v)))
+    except Exception:
+        return os.path.normcase(v)
 
 
 def _clean_display_title(value) -> str:
@@ -87,6 +107,7 @@ class PlayoutEngine:
         self._last_reload_key: Optional[tuple] = None
         self._last_reload_error: float = 0.0
         self._reload_cooldown_until: float = 0.0        # evita reintentos en bucle
+        self._reload_failures: int = 0                  # fallos seguidos del mismo evento
         self._end_events = 0
         self.player.set_on_end(self._on_player_end)
 
@@ -382,6 +403,8 @@ class PlayoutEngine:
                 self.player.seek(int(cursor_ms))
             except Exception:
                 pass
+        self._reload_failures = 0
+        self._reload_cooldown_until = 0.0
         return {"ok": True, "path": path, "cursor_ms": int(cursor_ms or 0)}
 
     # ------------------------------------------------------- transiciones
@@ -406,21 +429,30 @@ class PlayoutEngine:
 
     def _reload_throttled(self, row: dict, now: datetime,
                           cursor_ms: Optional[int] = None) -> dict:
-        """Recarga el evento actual con enfriamiento entre intentos fallidos."""
+        """Recarga el evento actual con enfriamiento entre intentos fallidos.
+
+        Si un archivo falla de forma consistente (p. ej. ruta inexistente),
+        la espera crece (2.5s, 5s, 10s...) hasta 30s para que VLC no esté
+        abriendo/cerrando la ventana en bucle.
+        """
         nowm = time.monotonic()
         if nowm < self._reload_cooldown_until:
-            return {"ok": False, "skipped": "cooldown"}
+            return {"ok": False, "skipped": "cooldown",
+                    "error": self._last_error or "reintentando..."}
         try:
             if cursor_ms is None:
                 cursor_ms = self._resume_cursor_ms(row, now)
             res = self._load_row(row, int(cursor_ms))
             self._reload_cooldown_until = 0.0
             self._last_reload_error = 0.0
+            self._reload_failures = 0
             return res
         except Exception as e:
             self._last_error = str(e)
             self._last_reload_error = nowm
-            self._reload_cooldown_until = nowm + 2.5
+            self._reload_failures = int(getattr(self, "_reload_failures", 0) or 0) + 1
+            delay = min(30.0, 2.5 * (2 ** min(self._reload_failures - 1, 4)))
+            self._reload_cooldown_until = nowm + delay
             return {"ok": False, "error": str(e)}
 
     def _on_player_end(self) -> None:
@@ -471,14 +503,12 @@ class PlayoutEngine:
         uri = snap.uri or ""
         if not uri:
             return True
-        # La URI puede venir como file:///... o ruta plana
+        # La URI puede venir como file:///C:/... o ruta plana; se compara ya
+        # normalizada para no recargar en bucle por diferencias de formato.
         expected = str(row.get("path") or "")
         if not expected:
             return False
-        exp_norm = Path(expected).resolve()
-        if uri.startswith("file://"):
-            return exp_norm.as_uri() != uri.split("?")[0]
-        return str(Path(uri).resolve()) != str(exp_norm)
+        return _norm_path(uri) != _norm_path(expected)
 
     def _start_ad(self, ad_row: dict, now: datetime, interrupted: Optional[dict]) -> dict:
         """Pone al aire un anuncio (evento COMMERCIAL)."""
@@ -596,7 +626,27 @@ class PlayoutEngine:
             elif changed or not self._interrupt:
                 self._capture_interrupt(program, now)
             if changed:
-                self._start_ad(cur, now, self._interrupt)
+                try:
+                    self._start_ad(cur, now, self._interrupt)
+                except Exception as e:
+                    # La tanda no pudo cargar: adoptamos la clave para que los
+                    # reintentos pasen por el camino con enfriamiento y la UI
+                    # vea el error (no se reintenta cada 0.5s).
+                    self._last_error = f"tanda: {e}"
+                    self._last_event_key = key
+                    self.ui.update({
+                        "mode": COMMERCIAL,
+                        "ad_break": True,
+                        "current": {
+                            "schedule_id": cur.get("id"),
+                            "media_id": cur.get("media_id", cur.get("id")),
+                            "title": cur.get("title") or "",
+                            "duration": float(cur.get("duration") or 0),
+                            "kind": COMMERCIAL,
+                            "position_ms": 0,
+                            "error": str(e),
+                        },
+                    })
             else:
                 # Mismo anuncio: vigilar que VLC siga con él
                 if not self._ended_but_window_open(cur, now):
@@ -624,6 +674,9 @@ class PlayoutEngine:
                 self._start_program(cur, now, cursor_ms=cursor)
             except Exception as e:
                 self._last_error = f"siguiente evento: {e}"
+                # Adoptar la clave evita reintentar cada 0.5s: el siguiente
+                # tick pasa por el control de salud con enfriamiento creciente.
+                self._last_event_key = key
                 self.ui["mode"] = PROGRAM
                 self.ui["current"] = {
                     "schedule_id": cur.get("id"),

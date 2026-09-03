@@ -239,6 +239,26 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(st.get(1), "playing",
                          "La tanda no debe marcar played la película (aún se reanuda)")
 
+    def test_no_reload_loop_when_uri_is_file_url(self):
+        """libvlc reporta file:///C:/... y el Scheduler guarda C:\\...: no debe
+        recargar en bucle (era la causa de que VLC se abriera y cerrara)."""
+        ma = self._add_media(self.mov_a, "Película A", 600)
+        start = self.now
+        self._add_event(ma, start, start + timedelta(minutes=10))
+        self.engine.tick()
+        opens = [c for c in self.player.calls if c[0] == "open"]
+        self.assertEqual(len(opens), 1, "la película debe cargarse una sola vez")
+
+        # VLC devuelve el archivo como file:/// con %20 en lugar de ruta plana
+        self.player.uri = Path(self.mov_a).resolve().as_uri()
+        self.player.state = "playing"
+        self.player.pos = 42_000
+        for _ in range(3):
+            self.engine.tick()
+        opens = [c for c in self.player.calls if c[0] == "open"]
+        self.assertEqual(len(opens), 1,
+                         "file:/// y ruta local son el mismo archivo: no recargar")
+
 
 class TrackMappingTest(unittest.TestCase):
     def test_ordinal_ignores_disable_entry(self):

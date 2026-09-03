@@ -66,6 +66,17 @@ PROBLEMAS COMUNES
     VLC no esta instalado o el panel no encuentra libvlc.
     Instala VLC o indica la carpeta en AJUSTES VLC.
 
+- La ventana de VLC se abre y se cierra sola (en bucle):
+    Ya no deberia pasar con esta version. Si VLC no puede
+    reproducir el archivo, el panel ahora lo dice con el
+    motivo exacto en la tarjeta "CONTROL DIRECTO DEL PLAYOUT"
+    (texto en rojo/⚠) y no reintenta cada segundo.
+
+- Error que dice "Archivo no encontrado: D:\..." (o E:\...):
+    La base guardo la ruta de otra maquina/carpeta. Reescanea
+    tus carpetas: pestaña SCANNER -> "Escanear", o agrega la
+    carpeta correcta en MEDIA POOL.
+
 - El panel no abre:
     Revisa que el puerto 8088 este libre (usa
     DETENER_TVPLAYOUT.bat si quedó un proceso anterior).
@@ -76,6 +87,13 @@ PROBLEMAS COMUNES
 
 - Quieres borrar y reinstalar desde cero:
     Borra la carpeta .venv (la crea el .bat de nuevo).
+
+REGISTRO DE ERRORES (tvplayout.log)
+------------------------------------------------
+Si algo falla al reproducir, junto a app_backend.py se crea
+el archivo  tvplayout.log  con los errores del motor y de VLC.
+Si necesitas ayuda, envia ese archivo o copia el mensaje rojo
+que muestra el panel al pulsar "CARGAR ACTUAL".
 
 NOTA
 ------------------------------------------------

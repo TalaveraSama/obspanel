@@ -342,14 +342,14 @@ class VlcPlayer(BasePlayer):
                     "--no-keyboard-events",
                     "--no-mouse-events",
                     "--no-osd",
+                    "--no-embedded-video",
                     "--network-caching=%d" % int(v.get("network_caching", 300) or 300),
                     "--audio-language=%s" % (v.get("audio_language") or "es,en,spa"),
                     "--sub-language=%s" % (v.get("sub_language") or "es,en,spa"),
                 ]
-                if bool(v.get("fullscreen", True)):
-                    args.append("--fullscreen")
-                else:
-                    args.append("--no-fullscreen")
+                # NOTA: pantalla completa NO se fuerza a nivel de instancia.
+                # Se aplica al iniciar cada archivo (_apply_fullscreen); así
+                # VLC no abre/cierra ventanas a negras con cada reintento.
                 self._instance = self._vlc.Instance(args)
                 self._player = self._instance.media_player_new()
                 self._connected = True
@@ -460,10 +460,42 @@ class VlcPlayer(BasePlayer):
             try:
                 m = self._player.get_media()
                 if not m:
-                    return self._expected_uri if False else ""
+                    return ""
                 return str(m.get_mrl() or "")
             except Exception:
                 return ""
+
+    @staticmethod
+    def _mrl_disk_path(mrl: str) -> str:
+        """Convierte un MRL (file:///C:/...) a ruta local de disco."""
+        v = str(mrl or "")
+        if v.lower().startswith("file://"):
+            v = v[7:]
+            try:
+                from urllib.parse import unquote
+                v = unquote(v)
+            except Exception:
+                pass
+            if len(v) > 2 and v[0] == "/" and v[2] == ":":
+                v = v[1:]  # file:///C:/... -> C:/...
+        return v
+
+    def _apply_fullscreen(self) -> None:
+        try:
+            want = bool((self.cfg.get("vlc") or {}).get("fullscreen", True))
+            if want and self._player is not None:
+                self._player.set_fullscreen(True)
+        except Exception:
+            pass
+
+    def _libvlc_error_text(self) -> str:
+        try:
+            raw = self._vlc.libvlc_errmsg() or b""
+            if isinstance(raw, bytes):
+                return raw.decode("utf-8", "replace").strip()
+            return str(raw).strip()
+        except Exception:
+            return ""
 
     def position_ms(self) -> int:
         try:
@@ -517,27 +549,48 @@ class VlcPlayer(BasePlayer):
                         pass
                 self._player.play()
                 self._end_pending = False
+                self._apply_fullscreen()
+                # Esperar a que arranque y detectar fallo real de libvlc
+                # (archivo inexistente, códec no soportado, etc.) para no
+                # entrar en un bucle de abrir/cerrar.
+                state = self._wait_ready(6000)
+                if state == STATE_ERROR:
+                    self._last_error = "VLC: %s" % (
+                        self._libvlc_error_text() or "no se pudo reproducir el archivo.")
+                    return {"ok": False, "error": self._last_error, "state": state,
+                            "uri": str(uri)}
+                if state == STATE_ENDED and not self.length_ms():
+                    self._last_error = ("VLC: el archivo no produjo contenido "
+                                        "(¿ruta inválida o archivo dañado?).")
+                    return {"ok": False, "error": self._last_error, "state": state,
+                            "uri": str(uri)}
                 if start_ms and start_ms > 0:
-                    self._wait_ready(2500)
-                    self.seek(int(start_ms))
-                return {"ok": True, "uri": str(uri), "start_ms": int(start_ms or 0)}
+                    if state in (STATE_PLAYING, STATE_PAUSED, STATE_BUFFERING):
+                        try:
+                            self._player.set_time(int(max(0, start_ms)))
+                            time.sleep(0.15)
+                        except Exception:
+                            pass
+                # Reintento de pantalla completa una vez que la ventana existe
+                self._apply_fullscreen()
+                return {"ok": True, "uri": str(uri),
+                        "start_ms": int(start_ms or 0), "state": self._state_name()}
             except Exception as e:
                 self._last_error = f"abrir media: {e}"
                 return {"ok": False, "error": self._last_error}
 
-    def _wait_ready(self, timeout_ms: int = 3000) -> None:
-        """Espera a que el input exista para poder consultar pistas / hacer seek."""
+    def _wait_ready(self, timeout_ms: int = 6000) -> str:
+        """Espera a que la reproducción arranque; devuelve el estado final."""
         deadline = time.monotonic() + (timeout_ms / 1000.0)
+        last = self._state_name()
         while time.monotonic() < deadline:
-            try:
-                state = self._state_name()
-                if state in (STATE_PLAYING, STATE_PAUSED, STATE_BUFFERING):
-                    return
-                if state in (STATE_ENDED, STATE_ERROR):
-                    return
-            except Exception:
-                pass
+            last = self._state_name()
+            if last in (STATE_PLAYING, STATE_PAUSED):
+                return last
+            if last in (STATE_ENDED, STATE_ERROR):
+                return last
             time.sleep(0.08)
+        return last
 
     def select_tracks(self, audio_index: int = -1, subtitle_index: int = -1,
                       external_sub: Optional[str] = None) -> dict:
@@ -650,56 +703,71 @@ class VlcPlayer(BasePlayer):
         ok, err = self.connect()
         if not ok:
             return {"ok": False, "error": err}
-        try:
-            self._player.play()
-            return {"ok": True}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        with self._lock:
+            try:
+                self._player.play()
+                self._end_pending = False
+                self._apply_fullscreen()
+                return {"ok": True}
+            except Exception as e:
+                self._last_error = f"play: {e}"
+                return {"ok": False, "error": self._last_error}
 
     def pause(self) -> dict:
         ok, err = self.connect()
         if not ok:
             return {"ok": False, "error": err}
-        try:
-            self._player.set_pause(1)
-            return {"ok": True}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        with self._lock:
+            try:
+                self._player.set_pause(1)
+                return {"ok": True}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
 
     def stop(self) -> dict:
         ok, err = self.connect()
         if not ok:
             return {"ok": False, "error": err}
-        try:
-            self._player.stop()
-            self._end_pending = False
-            return {"ok": True}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        with self._lock:
+            try:
+                self._player.stop()
+                self._end_pending = False
+                return {"ok": True}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
 
     def seek(self, ms: int) -> dict:
         ok, err = self.connect()
         if not ok:
             return {"ok": False, "error": err}
         target = max(0, int(ms or 0))
-        try:
-            self._wait_ready(2000)
-            self._player.set_time(target)
-            # verificación
-            time.sleep(0.12)
-            actual = self.position_ms()
-            return {"ok": True, "target_ms": target, "actual_ms": actual}
-        except Exception as e:
-            return {"ok": False, "target_ms": target, "actual_ms": self.position_ms(),
-                    "error": str(e)}
+        with self._lock:
+            try:
+                state = self._wait_ready(3000)
+                if state == STATE_ERROR:
+                    self._last_error = "VLC: %s" % (
+                        self._libvlc_error_text() or "no se pudo reproducir.")
+                    return {"ok": False, "target_ms": target, "actual_ms": self.position_ms(),
+                            "error": self._last_error}
+                self._player.set_time(target)
+                # verificación
+                time.sleep(0.12)
+                actual = self.position_ms()
+                return {"ok": True, "target_ms": target, "actual_ms": actual}
+            except Exception as e:
+                self._last_error = f"seek: {e}"
+                return {"ok": False, "target_ms": target, "actual_ms": self.position_ms(),
+                        "error": self._last_error}
 
     def set_volume(self, value: int) -> dict:
-        try:
-            self._volume = max(0, min(200, int(value)))
-            self._player.audio_set_volume(self._volume)
-            return {"ok": True, "volume": self._volume}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        with self._lock:
+            try:
+                self._volume = max(0, min(200, int(value)))
+                if self._player is not None:
+                    self._player.audio_set_volume(self._volume)
+                return {"ok": True, "volume": self._volume}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
 
     def audio_tracks(self) -> List[TrackDesc]:
         try:

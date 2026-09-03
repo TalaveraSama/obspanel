@@ -59,6 +59,29 @@ CFG["tmdb"].setdefault("language", "es-MX")
 CFG["tmdb"].setdefault("region", "MX")
 CFG["tmdb"].setdefault("last_error", "")
 DB=BASE/"tvplayout.db"; EXTS={".mkv",".mp4",".m4v",".mov",".avi",".webm",".ts",".m2ts",".mts"}
+
+# Log a tvplayout.log para diagnosticar en Windows sin depender de la consola
+import logging, logging.handlers  # noqa: E402
+_LOG=logging.getLogger("tvplayout")
+if not _LOG.handlers:
+    try:
+        _fh=logging.handlers.RotatingFileHandler(BASE/"tvplayout.log",
+                                                 maxBytes=2_000_000, backupCount=2,
+                                                 encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        _LOG.addHandler(_fh)
+        _LOG.setLevel(logging.INFO)
+        _LOG.propagate=False
+    except Exception:
+        pass
+_LAST_LOG_KEY=[None]
+def _log_once(key, msg):
+    if _LAST_LOG_KEY[0]==key:
+        return
+    _LAST_LOG_KEY[0]=key
+    try: _LOG.warning(msg)
+    except Exception: pass
+
 STATE={"vlc_ready":False,"vlc_error":None,"vlc_state":"idle",
        "scanner":{"running":False,"paused":False,"folder":"","found":0,"analyzed":0,"pending":0,"errors":[],"started":None,"finished":None},
        "current":None,"next":None,"upcoming":[],"obs_connected":False,
@@ -545,6 +568,19 @@ def verify_vlc_output(force=False):
             result["error"]="VLC no conectado"
     except Exception as e:
         result["error"]=str(e)
+    # Si el motor falló al cargar el evento, exponer el motivo exacto
+    # (p. ej. "Archivo no encontrado: D:\...") en el estado del panel.
+    try:
+        eng=get_engine()
+        if eng is not None:
+            le=str(eng._last_error or "").strip()
+            if le and str(result.get("error") or "") != le:
+                result["error"]=result.get("error") or le
+            ce=(eng.ui.get("current") or {}).get("error")
+            if ce and not result.get("error"):
+                result["error"]=str(ce)
+    except Exception:
+        pass
     STATE["vlc_ready"]=bool(result.get("ready"))
     STATE["vlc_error"]=result.get("error")
     VLC_STATUS_CACHE.update({"ts":now,"result":dict(result)})
@@ -765,11 +801,14 @@ async def engine():
         pass
     while True:
         try:
-            eng.tick()
+            # El tick habla con libvlc (puede esperar a que arranque el video);
+            # corre en un hilo para no congelar el panel.
+            await asyncio.to_thread(eng.tick)
         except Exception as e:
             STATE["last_error"]=f"playout: {e}"
+            _log_once("tick:"+str(e), f"playout tick error: {e}")
         try:
-            snap=eng.snapshot()
+            snap=await asyncio.to_thread(eng.snapshot)
             STATE.update({
                 "mode":snap.get("mode") or "IDLE",
                 "current":snap.get("current"),
@@ -784,13 +823,17 @@ async def engine():
             STATE["vlc_ready"]=bool(p.get("available",False) and p.get("has_input",False))
             STATE["vlc_error"]=p.get("error") or ""
             STATE["vlc_state"]=p.get("state") or "idle"
+            le=str(snap.get("last_error") or "").strip()
+            if le:
+                STATE["vlc_error"]=le
+                _log_once("err:"+le, f"playout: {le}")
             if p.get("position_ms") is not None and (STATE.get("current") or {}):
                 try:
                     STATE["current"]["position_ms"]=int(p.get("position_ms") or 0)
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            _log_once("snap:"+str(e), f"snapshot error: {e}")
         await asyncio.sleep(0.5)
 
 async def ads_maintainer():
