@@ -24,6 +24,11 @@ CFG["vlc"].setdefault("audio_language", "es,en,spa")
 CFG["vlc"].setdefault("sub_language", "es,en,spa")
 CFG["vlc"].setdefault("loop", False)
 CFG["vlc"].setdefault("shuffle", False)
+CFG["vlc"].setdefault("mode", "app")              # "app" = VLC instalado (ventana estable para OBS); "libvlc" = embebido
+CFG["vlc"].setdefault("exe", "")                 # ruta a vlc.exe (deteccion automatica si vacio)
+CFG["vlc"].setdefault("http_host", "127.0.0.1")
+CFG["vlc"].setdefault("http_port", 9099)
+CFG["vlc"].setdefault("http_password", "tvplayout")
 CFG.setdefault("auto_ads", {})
 CFG["auto_ads"].setdefault("min_program_tail_seconds", 90)
 CFG.setdefault("host", "127.0.0.1")
@@ -117,10 +122,14 @@ def get_engine():
 
 def vlc_info():
     r=resolve_vlc(CFG)
-    VLC_INFO.update({"module_available":bool(r.get("module_available",False)),
+    VLC_INFO.update({"ok":bool(r.get("ok",False)),
+                     "module_available":bool(r.get("module_available",False)),
+                     "mode":r.get("mode","app"),
+                     "vlc_exe":r.get("vlc_exe","") or "",
                      "lib_dir":r.get("lib_dir","") or VLC_INFO.get("lib_dir",""),
                      "lib_file":r.get("lib_file","") or VLC_INFO.get("lib_file",""),
-                     "vlc_version":r.get("vlc_version","") or VLC_INFO.get("vlc_version","")})
+                     "vlc_version":r.get("vlc_version","") or VLC_INFO.get("vlc_version",""),
+                     "error":r.get("error","") or ""})
     if r.get("error") and not VLC_INFO.get("ok"):
         VLC_INFO["error"]=r["error"]
     return dict(VLC_INFO)
@@ -1233,7 +1242,10 @@ async def vlc_action(action:str=Form(...)):
 @app.post("/config/vlc")
 async def config_vlc(channel_name:str=Form(""), fullscreen:int=Form(1), volume:int=Form(100),
                      network_caching:int=Form(300), lib_dir:str=Form(""), vlc_path:str=Form(""),
-                     audio_language:str=Form("es,en,spa"), sub_language:str=Form("es,en,spa")):
+                     audio_language:str=Form("es,en,spa"), sub_language:str=Form("es,en,spa"),
+                     mode:str=Form("app"), vlc_exe:str=Form(""),
+                     http_port:int=Form(9099), http_password:str=Form("tvplayout")):
+    global PLAYER
     CFG.setdefault("vlc",{})
     V=CFG["vlc"]
     if channel_name.strip():
@@ -1245,13 +1257,27 @@ async def config_vlc(channel_name:str=Form(""), fullscreen:int=Form(1), volume:i
         V["lib_dir"]=lib_dir.strip()
     if vlc_path.strip():
         V["path"]=vlc_path.strip()
+    # Modo de reproductor: "app" = VLC instalado (ventana unica para OBS),
+    # "libvlc" = ventana embebida. Ruta al vlc.exe y control HTTP.
+    V["mode"]="libvlc" if str(mode).strip().lower()=="libvlc" else "app"
+    if vlc_exe.strip():
+        V["exe"]=vlc_exe.strip()
+    V["http_host"]="127.0.0.1"
+    V["http_port"]=max(1024,int(http_port or 9099))
+    if str(http_password or "").strip():
+        V["http_password"]=str(http_password).strip()
     V["audio_language"]=(audio_language.strip() or "es,en,spa")
     V["sub_language"]=(sub_language.strip() or "es,en,spa")
     save_cfg()
+    # Cambiar de modo/exe requiere reconstruir el reproductor.
     try:
-        get_player().set_volume(V["volume"])
-    except Exception:
-        pass
+        if PLAYER is not None:
+            try: PLAYER.close()
+            except Exception: pass
+        PLAYER=None
+        get_player()
+    except Exception as e:
+        STATE["vlc_error"]=str(e)
     return RedirectResponse("/?tab=settings",303)
 
 @app.post("/api/vlc/start")

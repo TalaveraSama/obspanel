@@ -1,13 +1,25 @@
-# TVPlayout VLC PRO — Playout 24/7 con VLC (sin OBS)
+# TVPlayout VLC PRO — Playout 24/7 con VLC (app VLC + OBS por captura de ventana)
 
 Panel de automatización para un canal de TV: el **Scheduler** es la fuente de
-verdad y **VLC (libvlc)** es el reproductor. Ya **no se usa OBS** para
-reproducir: cada película se carga directamente desde su archivo original en
-una instancia de VLC controlada por el panel.
+verdad y **VLC es el reproductor**. El panel controla el **VLC que ya tienes
+instalado** (vlc.exe) por su interfaz HTTP: le carga cada película, lo
+pausa/busca y maneja las tandas, pero la **ventana de VLC es única y nunca se
+cierra** al cambiar de contenido.
+
+> **OBS:** OBS ya **no reproduce** ni usa fuentes VLC: solo **captura la
+> ventana de VLC** ("Captura de ventana" → *VLC media player*). Como la ventana
+> no se recrea en cada película, la captura nunca pierde el objetivo ni se va a
+> negro. Si prefieres la ventana embebida antigua, en **⚙️ AJUSTES VLC** puedes
+> cambiar el modo a `libvlc`.
 
 ## Reproducción
-- Las películas se cargan desde su ruta original en **VLC** (libvlc), con
-  ventana en pantalla completa si está configurado.
+- **Modo app (recomendado):** el panel arranca el VLC instalado con
+  `--extraintf=http` (puerto por defecto 9099) y lo controla por HTTP. Una
+  sola ventana persistente → OBS la captura por ventana.
+- **Modo libvlc (respaldo):** ventana embebida vía python-vlc. No requiere
+  configurar OBS por ventana, pero la ventana es del panel.
+- Las películas se cargan desde su ruta original en **VLC**, con ventana en
+  pantalla completa si está configurado.
 - El reloj del Scheduler manda: cuando llega la hora de la **siguiente
   película**, el motor la carga y la posiciona en el punto correcto.
 - Los botones **⏭ SIGUIENTE** y **⏮ ANTERIOR** cambian de película **al

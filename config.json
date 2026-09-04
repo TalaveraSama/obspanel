@@ -74,6 +74,11 @@
     "sub_language": "es,en,spa",
     "loop": false,
     "shuffle": false,
-    "source": "VLC"
+    "source": "VLC",
+    "mode": "app",
+    "exe": "",
+    "http_host": "127.0.0.1",
+    "http_port": 9099,
+    "http_password": "tvplayout"
   }
 }

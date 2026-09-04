@@ -34,7 +34,17 @@ PASOS
    - Se abre el panel en tu navegador:
           http://127.0.0.1:8088
 
-4) En el panel, pestaña "AJUSTES VLC":
+4) IMPORTANTE - Como se usa VLC con OBS:
+   - El panel usa el VLC que YA tienes instalado y lo controla
+     por HTTP. La ventana de VLC es UNA SOLA y no se cierra al
+     cambiar de pelicula.
+   - En OBS agrega una fuente  "Captura de ventana"  y elige la
+     ventana  "VLC media player".  NO uses "Fuente de video VLC".
+   - Marca "Pantalla completa" en AJUSTES VLC si quieres que VLC
+     se ponga solo en full screen. Esa ventana fija es la que OBS
+     captura para tu emision.
+
+5) En el panel, pestaña "AJUSTES VLC":
    - Veras si python-vlc y libvlc se detectaron.
    - Si libvlc NO aparece (carpeta vacia), escribe la ruta
      de VLC, por ejemplo:
@@ -43,19 +53,19 @@ PASOS
    - Pulsa "INICIAR VLC" (o PREPARAR VLC en PLAYOUT):
      debe cargar la pelicula que toca segun el Scheduler.
 
-5) Verifica en PLAYOUT:
+6) Verifica en PLAYOUT:
    - ▶ PLAY / ⏸ PAUSA / ⏭ SIGUIENTE / ↻ REINICIAR
    - Al llegar la hora, la SIGUIENTE PELICULA carga sola.
    - ✂️ TANDA AHORA corta la pelicula, pasa la tanda
      comercial y la reanuda en el punto exacto.
 
-6) Pestaña "TANDAS":
+7) Pestaña "TANDAS":
    - Activa el refresco automatico (AUTO_ADS) si quieres
      tandas programadas dentro de cada pelicula.
    - Debe haber comerciales escaneados con categoria
      "Commercial" o "Promo" en el Media Pool.
 
-7) Para apagar el canal:
+8) Para apagar el canal:
    - Doble clic en  DETENER_TVPLAYOUT.bat
    - Cierra el VLC que abrio el panel (o deja la ventana
      abierta si prefieres volver a arrancar rapido).
@@ -101,3 +111,11 @@ Esta version reproduce directamente con VLC (libvlc).
 Ya no se necesita OBS ni el plugin vlc_source de OBS.
 Si aun tienes OBS abierto con escenas del canal, puedes
 apagarlo: la salida ahora sale por la ventana de VLC.
+
+CONTROL HTTP DE VLC (puerto local)
+------------------------------------------------
+El panel habla con VLC por HTTP en 127.0.0.1:9099
+(puerto configurable en AJUSTES VLC, por defecto 9099).
+Es solo LOCAL (tu maquina); si Windows pregunta por el
+Firewall la primera vez, permite VLC en redes privadas.
+Si el puerto lo ocupa otro programa, cambialo en AJUSTES.

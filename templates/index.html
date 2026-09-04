@@ -127,25 +127,41 @@ async function tvpAdsCutNow(){const m=document.getElementById('adsMsg');m.textCo
 async function tvpAdsSkip(){const m=document.getElementById('adsMsg');m.textContent='Saltando tanda...';try{const r=await fetch('/api/ads/skip',{method:'POST'}),d=await r.json();if(!d.ok)throw Error(d.error||'No hay tanda');m.textContent='✓ Tanda saltada. Vuelve la película: '+(d.title||'');}catch(e){m.textContent='✕ '+e.message}}
 </script>
 {% elif tab=='settings' %}
-<section class="card"><h2>⚙️ Reproductor VLC (sin OBS)</h2>
-<p>TVPlayout abre una instancia de <b>VLC</b> (libvlc) en esta máquina y la usa como salida de canal. Cada evento del Scheduler se carga en VLC directamente desde su archivo original.</p>
+<section class="card"><h2>⚙️ Reproductor VLC</h2>
+<p>TVPlayout usa el <b>VLC que ya tienes instalado</b> como reproductor del canal. Lo controla y le carga cada película, pero la <b>ventana de VLC es única y no se cierra</b> al cambiar de contenido: así <b>OBS la captura por ventana</b> sin perder el objetivo.</p>
 <div class="stats" id="vlcInfoBox">
-<b>python-vlc:</b> {{'OK' if vstatus.vlc_info.module_available else 'NO INSTALADO'}} ·
-<b>libvlc:</b> <span id="vlcLibDir">{{vstatus.vlc_info.lib_dir or 'auto'}}</span> ·
+<b>Modo:</b> <span id="vlcMode">{{vstatus.vlc_info.mode or 'app'}}</span> ·
+<b>VLC instalado:</b> <span id="vlcExe">{{vstatus.vlc_info.vlc_exe or 'no detectado'}}</span> ·
+<b>python-vlc:</b> {{'OK' if vstatus.vlc_info.module_available else 'no necesario (modo app)'}} ·
 <b>estado:</b> <span id="cfgVlcState">{{vstatus.state or 'idle'}}</span>
 </div>
 {% if vstatus.error and not vstatus.available %}<div class="error">VLC: {{vstatus.error}}</div>{% endif %}
 <form method="post" action="/config/vlc" class="form" style="margin-top:12px">
-<label>Nombre del canal (guardar)<input name="channel_name" placeholder="{{cfg.channel.name}}" value="{{cfg.channel.name}}"></label>
+<label>Tipo de reproductor
+<select name="mode">
+<option value="app" {% if (cfg.vlc.mode or 'app')=='app' %}selected{% endif %}>App VLC instalada (recomendado · ventana fija para OBS)</option>
+<option value="libvlc" {% if cfg.vlc.mode=='libvlc' %}selected{% endif %}>libvlc embebido (ventana propia del panel)</option>
+</select></label>
+<label>Ruta a vlc.exe (app)<input name="vlc_exe" placeholder="C:\Program Files\VideoLAN\VLC\vlc.exe" value="{{cfg.vlc.exe or ''}}"></label>
+<label>Puerto control HTTP (app)<input type="number" name="http_port" min="1024" max="65535" value="{{cfg.vlc.http_port or 9099}}"></label>
+<label>Contraseña HTTP (app)<input name="http_password" value="{{cfg.vlc.http_password or 'tvplayout'}}"></label>
+<label>Nombre del canal<input name="channel_name" placeholder="{{cfg.channel.name}}" value="{{cfg.channel.name}}"></label>
 <label>Pantalla completa<input type="checkbox" name="fullscreen" value="1" {% if cfg.vlc.fullscreen %}checked{% endif %}></label>
 <label>Volumen maestro (0-200)<input type="number" name="volume" min="0" max="200" value="{{cfg.vlc.volume}}"></label>
 <label>Cache de red (ms)<input type="number" name="network_caching" min="50" step="10" value="{{cfg.vlc.network_caching}}"></label>
-<label>Carpeta libvlc (opcional)<input name="lib_dir" placeholder="C:\Program Files\VideoLAN\VLC" value="{{cfg.vlc.lib_dir}}"></label>
+<label>Carpeta libvlc (solo modo embebido)<input name="lib_dir" placeholder="C:\Program Files\VideoLAN\VLC" value="{{cfg.vlc.lib_dir}}"></label>
 <label>Idioma audio (auto)<input name="audio_language" value="{{cfg.vlc.audio_language}}"></label>
 <label>Idioma subs (auto)<input name="sub_language" value="{{cfg.vlc.sub_language}}"></label>
 <button>💾 GUARDAR AJUSTES VLC</button>
 </form>
-<p style="margin-top:8px">La carpeta de libvlc normalmente se detecta sola cuando VLC está instalado. Solo indícala si TVPlayout no encuentra VLC.</p>
+<div class="info" style="margin-top:10px">
+<b>📺 Cómo capturarlo en OBS:</b> en OBS agrega una fuente <b>“Captura de ventana”</b> y elige la ventana
+<b>“VLC media player”</b> (no “Video Source”). Como el panel no abre/cierra ventanas, esa fuente permanece fija.
+Marca <b>pantalla completa</b> arriba si quieres que VLC se ponga en full screen al arrancar.
+</div>
+<p style="margin-top:8px">La ruta a <b>vlc.exe</b> normalmente se detecta sola. Si no, indícala (p. ej.
+<code>C:\Program Files\VideoLAN\VLC\vlc.exe</code>). El modo <b>app</b> no necesita python-vlc; el modo
+<b>libvlc</b> sí, y crea una ventana propia que puede cambiar al cambiar de película.</p>
 </section>
 <section class="card"><h2>🔌 Control del reproductor</h2>
 <div class="twobtn">
