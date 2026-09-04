@@ -105,6 +105,49 @@ class HttpPlayerTest(unittest.TestCase):
         self.assertLess(abs(snap.position_ms - 60000), 3000)
         self.assertEqual(snap.length_ms, 600000)
 
+    def test_launch_builds_arguments(self):
+        """El arranque de la app VLC debe construir los argumentos sin errores.
+
+        Regresion: _launch_vlc usaba una variable ``v`` que no existia en su
+        ambito (NameError) y el VLC instalado nunca llegaba a arrancar.
+        """
+        import subprocess
+
+        captured = {}
+
+        class FakePopen:
+            def __init__(self, args, **kwargs):
+                captured["args"] = list(args)
+                captured["kwargs"] = dict(kwargs)
+
+        original = subprocess.Popen
+        subprocess.Popen = FakePopen
+        try:
+            self.pl._exe = str(Path(__file__).resolve())  # existe -> pasa el chequeo
+            ok, err = self.pl._launch_vlc()
+        finally:
+            subprocess.Popen = original
+
+        self.assertTrue(ok, err)
+        args = captured.get("args") or []
+        joined = " ".join(args)
+        self.assertEqual(args[0], self.pl._exe)
+        self.assertIn("--extraintf", args)
+        self.assertIn("http", args)
+        self.assertIn("--http-port", args)
+        self.assertIn(str(self.port), args)
+        self.assertIn("--http-password", args)
+        self.assertIn("tvplayout", args)
+        # Idiomas por defecto cuando la config no los trae
+        self.assertIn("--audio-language=es,en,spa", joined)
+        self.assertIn("--sub-language=es,en,spa", joined)
+
+    def test_launch_without_executable_reports_friendly_error(self):
+        self.pl._exe = ""
+        ok, err = self.pl._launch_vlc()
+        self.assertFalse(ok)
+        self.assertIn("VLC", err)
+
     def test_pause_play_stop_volume(self):
         self.pl.connect()
         self.pl.open_uri("/tmp/X.mkv")

@@ -963,6 +963,7 @@ class VlcHttpPlayer(BasePlayer):
         if not self._exe or not Path(self._exe).exists():
             return False, ("No se encontro la app VLC instalada. Indica la ruta de "
                            "vlc.exe en AJUSTES VLC (o instala VLC).")
+        v = (self.cfg.get("vlc") or {})
         args = [
             self._exe,
             "--intf", "qt",
@@ -975,12 +976,12 @@ class VlcHttpPlayer(BasePlayer):
             "--no-keyboard-events",
             "--no-mouse-events",
             "--no-one-instance",
-            "--network-caching=%d" % int((self.cfg.get("vlc") or {}).get("network_caching", 300) or 300),
+            "--network-caching=%d" % int(v.get("network_caching", 300) or 300),
             "--audio-language=%s" % (v.get("audio_language") or "es,en,spa"),
             "--sub-language=%s" % (v.get("sub_language") or "es,en,spa"),
             "--preferred-resolution=-1",
         ]
-        if bool((self.cfg.get("vlc") or {}).get("fullscreen", True)):
+        if bool(v.get("fullscreen", True)):
             args.append("--fullscreen")
         try:
             kwargs = {}

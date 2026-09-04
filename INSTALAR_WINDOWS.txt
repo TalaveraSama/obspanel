@@ -72,9 +72,16 @@ PASOS
 
 PROBLEMAS COMUNES
 ------------------------------------------------
+- ANTES QUE NADA, ejecuta  DIAGNOSTICO_VLC.bat
+    Revisa si encuentra vlc.exe, si la interfaz HTTP de VLC
+    responde en 127.0.0.1:9099, si la contraseña coincide y
+    si el panel ve a VLC listo; y te dice que corregir.
+
 - "python-vlc no disponible" o "VLC no disponible":
-    VLC no esta instalado o el panel no encuentra libvlc.
-    Instala VLC o indica la carpeta en AJUSTES VLC.
+    En modo "App VLC instalada" python-vlc NO hace falta;
+    el panel controla VLC por HTTP. Si aun asi falla, VLC no
+    esta instalado o no encuentra vlc.exe: instalalo o indica
+    la ruta completa en AJUSTES VLC -> "Ruta a vlc.exe (app)".
 
 - La ventana de VLC se abre y se cierra sola (en bucle):
     Ya no deberia pasar con esta version. Si VLC no puede

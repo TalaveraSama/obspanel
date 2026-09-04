@@ -61,3 +61,20 @@ Ejecuta `INICIAR_TVPLAYOUT.bat`. Las dependencias se instalan desde
 `requirements.txt` solo cuando hacen falta. Abre el panel en
 `http://127.0.0.1:8088` y pulsa **🚀 INICIAR VLC** (o PREPARAR VLC) para
 arrancar el reproductor.
+
+## Guía paso a paso (VLC + OBS)
+La guía completa —instalación, ajustes, captura en OBS y solución de
+problemas— está en **[GUIA_VLC.md](GUIA_VLC.md)**.
+
+Resumen:
+1. Instala **VLC** (64 bits) y deja el modo **App VLC instalada** en
+   **⚙️ AJUSTES VLC** (puerto HTTP `9099`, contraseña `tvplayout`).
+2. Pulsa **🚀 INICIAR VLC**: el panel lanza `vlc.exe --extraintf=http …` y lo
+   controla por HTTP. La ventana es **única y persistente**.
+3. En OBS agrega **Captura de ventana → “VLC media player”** (no “Fuente de
+   vídeo VLC”).
+4. Programa en **📅 SCHEDULER** y vigila en **▶ PLAYOUT**.
+
+Si VLC no arranca o no responde, ejecuta **`DIAGNOSTICO_VLC.bat`**
+(o `python tools/vlc_doctor.py --panel`): revisa el ejecutable, la interfaz
+HTTP, la contraseña y el estado del panel, y te dice qué corregir.
